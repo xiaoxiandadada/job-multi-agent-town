@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Job Agent Studio</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+    body { margin: 0; background: #09111f; color: #e8eefc; }
+    main { max-width: 1040px; margin: 0 auto; padding: 48px 24px; }
+    h1 { font-size: clamp(34px, 6vw, 64px); margin: 0 0 12px; }
+    .muted { color: #97a8c5; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap: 14px; margin: 28px 0; }
+    .card { background: #111d32; border: 1px solid #273653; border-radius: 16px; padding: 18px; }
+    input, textarea, select, button { box-sizing: border-box; width: 100%; border-radius: 10px; border: 1px solid #344666; padding: 11px; background: #0c1729; color: inherit; margin: 6px 0; }
+    button { background: #6c63ff; border: 0; font-weight: 700; cursor: pointer; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+<main>
+  <p class="muted">2027 CAMPUS RECRUITING · MULTI-AGENT HARNESS</p>
+  <h1>Job Agent Studio</h1>
+  <p class="muted">飞书只是入口。角色、模型、评测和运行轨迹都由自己的 Runtime 控制。</p>
+
+  <section>
+    <h2>角色注册表</h2>
+    <div id="roles" class="grid"></div>
+  </section>
+
+  <section class="card">
+    <h2>一键添加角色</h2>
+    <input id="role-id" placeholder="role_id，例如 bioinformatics_coach">
+    <input id="role-name" placeholder="显示名称">
+    <input id="role-goal" placeholder="角色目标">
+    <textarea id="role-prompt" placeholder="System prompt"></textarea>
+    <input id="role-keywords" placeholder="触发词，逗号分隔">
+    <button onclick="addRole()">添加并立即启用</button>
+  </section>
+
+  <section class="card" style="margin-top:14px">
+    <h2>运行任务</h2>
+    <textarea id="query" placeholder="例如：分析这个 Agent JD，并给出简历与作品建议"></textarea>
+    <select id="mode"><option>parallel</option><option>sequential</option><option>single</option></select>
+    <button onclick="runAgents()">运行 Multi-Agent</button>
+    <pre id="output" class="muted"></pre>
+  </section>
+</main>
+<script>
+async function loadRoles() {
+  const roles = await fetch('/api/roles').then(r => r.json());
+  document.querySelector('#roles').innerHTML = roles.map(role =>
+    `<article class="card"><strong>${role.display_name}</strong><p class="muted">${role.role_id}</p><p>${role.goal}</p></article>`
+  ).join('');
+}
+async function addRole() {
+  const body = {
+    role_id: document.querySelector('#role-id').value,
+    display_name: document.querySelector('#role-name').value,
+    goal: document.querySelector('#role-goal').value,
+    system_prompt: document.querySelector('#role-prompt').value,
+    trigger_keywords: document.querySelector('#role-keywords').value.split(',').map(x => x.trim()).filter(Boolean),
+    tools: [], model_profile: 'default', enabled: true
+  };
+  const response = await fetch('/api/roles', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body)});
+  if (!response.ok) alert(JSON.stringify(await response.json()));
+  else await loadRoles();
+}
+async function runAgents() {
+  const output = document.querySelector('#output');
+  output.textContent = '运行中…';
+  const response = await fetch('/api/runs', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({
+    query: document.querySelector('#query').value,
+    mode: document.querySelector('#mode').value,
+    use_judge: true
+  })});
+  output.textContent = JSON.stringify(await response.json(), null, 2);
+}
+loadRoles();
+</script>
+</body>
+</html>
+
