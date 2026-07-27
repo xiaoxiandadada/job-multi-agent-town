@@ -4,9 +4,17 @@ import asyncio
 import time
 import uuid
 
+from .activity import ActivityStore
 from .model_client import ModelClient
 from .models import AgentResult, RunMetrics, RunReport, RunRequest
 from .registry import RoleRegistry
+
+
+CONTEXT_ROLE_IDS = {
+    "job_scout",
+    "jd_analyst",
+    "job_knowledge_curator",
+}
 
 
 class MultiAgentOrchestrator:
@@ -15,10 +23,21 @@ class MultiAgentOrchestrator:
         registry: RoleRegistry,
         model_client: ModelClient,
         max_concurrency: int = 4,
+        activity_store: ActivityStore | None = None,
+        orchestrator_name: str = "asyncio",
     ):
         self.registry = registry
         self.model_client = model_client
         self.semaphore = asyncio.Semaphore(max(1, max_concurrency))
+        self.activity_store = activity_store
+        self.orchestrator_name = orchestrator_name
+
+    def _record(self, **values) -> None:
+        if self.activity_store is not None:
+            self.activity_store.record(
+                orchestrator=self.orchestrator_name,
+                **values,
+            )
 
     def select_roles(self, request: RunRequest):
         roles = [
@@ -41,15 +60,35 @@ class MultiAgentOrchestrator:
             return selected[:1]
         return list({role.role_id: role for role in selected}.values())
 
-    async def _run_role(self, role, query: str) -> AgentResult:
+    async def _complete_role(self, role, query: str):
+        async with self.semaphore:
+            return await self.model_client.complete(role, query)
+
+    async def _run_role(
+        self,
+        role,
+        query: str,
+        *,
+        run_id: str | None = None,
+        phase: str = "action",
+    ) -> AgentResult:
         started = time.perf_counter()
+        if run_id:
+            self._record(
+                run_id=run_id,
+                kind="agent_started",
+                status="running",
+                phase=phase,
+                role_id=role.role_id,
+                display_name=role.display_name,
+                query=query,
+            )
         try:
-            async with self.semaphore:
-                reply = await asyncio.wait_for(
-                    self.model_client.complete(role, query),
-                    timeout=role.timeout_seconds,
-                )
-            return AgentResult(
+            reply = await asyncio.wait_for(
+                self._complete_role(role, query),
+                timeout=role.timeout_seconds,
+            )
+            result = AgentResult(
                 role_id=role.role_id,
                 display_name=role.display_name,
                 output=reply.content,
@@ -59,7 +98,7 @@ class MultiAgentOrchestrator:
                 model=reply.model,
             )
         except asyncio.TimeoutError:
-            return AgentResult(
+            result = AgentResult(
                 role_id=role.role_id,
                 display_name=role.display_name,
                 status="timeout",
@@ -67,32 +106,174 @@ class MultiAgentOrchestrator:
                 error="agent timed out",
             )
         except Exception as exc:
-            return AgentResult(
+            result = AgentResult(
                 role_id=role.role_id,
                 display_name=role.display_name,
                 status="error",
                 latency_ms=(time.perf_counter() - started) * 1000,
                 error=str(exc),
             )
+        if run_id:
+            self._record(
+                run_id=run_id,
+                kind="agent_completed",
+                status=result.status,
+                phase=phase,
+                role_id=result.role_id,
+                display_name=result.display_name,
+                model=result.model,
+                latency_ms=result.latency_ms,
+                output=result.output,
+                error=result.error,
+            )
+        return result
 
-    async def run(self, request: RunRequest) -> RunReport:
-        started = time.perf_counter()
-        selected = self.select_roles(request)
-        if request.mode == "parallel":
-            results = list(
-                await asyncio.gather(
-                    *(self._run_role(role, request.query) for role in selected)
+    async def _run_parallel(
+        self,
+        roles,
+        query: str,
+        *,
+        run_id: str | None = None,
+        phase: str = "action",
+    ) -> list[AgentResult]:
+        return list(
+            await asyncio.gather(
+                *(
+                    self._run_role(
+                        role,
+                        query,
+                        run_id=run_id,
+                        phase=phase,
+                    )
+                    for role in roles
                 )
             )
+        )
+
+    @staticmethod
+    def _format_results(results: list[AgentResult]) -> str:
+        return "\n\n".join(
+            f"## {result.display_name}\n{result.output}"
+            for result in results
+            if result.status == "ok"
+        )
+
+    async def run(self, request: RunRequest) -> RunReport:
+        run_id = str(uuid.uuid4())
+        started = time.perf_counter()
+        self._record(
+            run_id=run_id,
+            kind="run_started",
+            status="running",
+            phase="route",
+            mode=request.mode,
+            query=request.query,
+        )
+        selected = self.select_roles(request)
+        self._record(
+            run_id=run_id,
+            kind="route_completed",
+            status="completed",
+            phase="route",
+            mode=request.mode,
+            selected_role_ids=[role.role_id for role in selected],
+        )
+        if request.mode == "parallel":
+            self._record(
+                run_id=run_id,
+                kind="phase_started",
+                status="running",
+                phase="action",
+                mode=request.mode,
+                selected_role_ids=[role.role_id for role in selected],
+            )
+            results = await self._run_parallel(
+                selected,
+                request.query,
+                run_id=run_id,
+                phase="action",
+            )
+        elif request.mode == "collaborative":
+            context_roles = [
+                role for role in selected if role.role_id in CONTEXT_ROLE_IDS
+            ]
+            action_roles = [
+                role for role in selected if role.role_id not in CONTEXT_ROLE_IDS
+            ]
+            self._record(
+                run_id=run_id,
+                kind="phase_started",
+                status="running",
+                phase="context",
+                mode=request.mode,
+                selected_role_ids=[role.role_id for role in context_roles],
+            )
+            context_results = await self._run_parallel(
+                context_roles,
+                request.query,
+                run_id=run_id,
+                phase="context",
+            )
+            context_output = self._format_results(context_results)
+            action_query = request.query
+            if context_output:
+                action_query = (
+                    f"用户原始任务：{request.query}\n\n"
+                    "以下是上游 Agent 已完成的岗位情报、JD 分析与知识补充。"
+                    "请基于这些证据继续工作，并指出仍待核验的内容：\n\n"
+                    f"{context_output}"
+                )
+                self._record(
+                    run_id=run_id,
+                    kind="handoff_created",
+                    status="completed",
+                    phase="action",
+                    mode=request.mode,
+                    output=context_output,
+                    source_role_ids=[
+                        result.role_id for result in context_results
+                    ],
+                    target_role_ids=[
+                        role.role_id for role in action_roles
+                    ],
+                )
+            self._record(
+                run_id=run_id,
+                kind="phase_started",
+                status="running",
+                phase="action",
+                mode=request.mode,
+                selected_role_ids=[role.role_id for role in action_roles],
+            )
+            action_results = await self._run_parallel(
+                action_roles,
+                action_query,
+                run_id=run_id,
+                phase="action",
+            )
+            results = [*context_results, *action_results]
         else:
+            self._record(
+                run_id=run_id,
+                kind="phase_started",
+                status="running",
+                phase="action",
+                mode=request.mode,
+                selected_role_ids=[role.role_id for role in selected],
+            )
             results = []
             for role in selected:
-                results.append(await self._run_role(role, request.query))
+                results.append(
+                    await self._run_role(
+                        role,
+                        request.query,
+                        run_id=run_id,
+                        phase="action",
+                    )
+                )
 
         successful = [result for result in results if result.status == "ok"]
-        final_output = "\n\n".join(
-            f"## {result.display_name}\n{result.output}" for result in successful
-        )
+        final_output = self._format_results(successful)
         judge_calls = 0
         if request.use_judge and successful:
             try:
@@ -100,7 +281,20 @@ class MultiAgentOrchestrator:
                 judge_input = (
                     f"用户任务：{request.query}\n\n请审核以下角色结果：\n{final_output}"
                 )
-                judge_result = await self._run_role(judge, judge_input)
+                self._record(
+                    run_id=run_id,
+                    kind="phase_started",
+                    status="running",
+                    phase="judge",
+                    mode=request.mode,
+                    selected_role_ids=["judge"],
+                )
+                judge_result = await self._run_role(
+                    judge,
+                    judge_input,
+                    run_id=run_id,
+                    phase="judge",
+                )
                 results.append(judge_result)
                 judge_calls = 1
                 if judge_result.status == "ok":
@@ -121,8 +315,8 @@ class MultiAgentOrchestrator:
             output_tokens=sum(result.output_tokens for result in results),
             parallel_speedup_estimate=(sum_ms / wall_ms if wall_ms else 1.0),
         )
-        return RunReport(
-            run_id=str(uuid.uuid4()),
+        report = RunReport(
+            run_id=run_id,
             query=request.query,
             mode=request.mode,
             role_registry_version=self.registry.version,
@@ -130,4 +324,13 @@ class MultiAgentOrchestrator:
             final_output=final_output,
             metrics=metrics,
         )
-
+        self._record(
+            run_id=run_id,
+            kind="run_completed",
+            status="completed",
+            phase="system",
+            mode=request.mode,
+            output=final_output,
+            metrics=metrics.model_dump(),
+        )
+        return report

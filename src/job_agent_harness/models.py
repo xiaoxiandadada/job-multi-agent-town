@@ -25,7 +25,7 @@ class RoleSpec(BaseModel):
 class RunRequest(BaseModel):
     query: str = Field(min_length=2, max_length=20_000)
     requested_roles: list[str] = Field(default_factory=list)
-    mode: Literal["single", "sequential", "parallel"] = "parallel"
+    mode: Literal["single", "sequential", "parallel", "collaborative"] = "parallel"
     use_judge: bool = True
 
 
@@ -68,4 +68,3 @@ class RunReport(BaseModel):
     results: list[AgentResult]
     final_output: str
     metrics: RunMetrics
-

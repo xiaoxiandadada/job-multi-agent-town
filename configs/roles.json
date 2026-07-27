@@ -6,8 +6,9 @@
     "system_prompt": "只处理中国 2027 届正式校招。输出来源、届别、岗位类型和核验风险，不编造链接。",
     "trigger_keywords": ["岗位", "秋招", "校招", "招聘", "机会"],
     "tools": ["web_search"],
-    "model_profile": "default",
-    "enabled": true
+    "model_profile": "reliable",
+    "enabled": true,
+    "timeout_seconds": 75.0
   },
   {
     "role_id": "jd_analyst",
@@ -16,8 +17,20 @@
     "system_prompt": "使用结构化字段分析 JD，并区分硬要求、加分项和当前缺口。",
     "trigger_keywords": ["JD", "职责", "要求", "关键词", "匹配"],
     "tools": ["local_docs"],
-    "model_profile": "default",
-    "enabled": true
+    "model_profile": "reliable",
+    "enabled": true,
+    "timeout_seconds": 60.0
+  },
+  {
+    "role_id": "job_knowledge_curator",
+    "display_name": "岗位知识补充员",
+    "goal": "补充目标岗位的领域知识、技术栈、工程难点与学习优先级",
+    "system_prompt": "识别目标岗位方向，并补充可用于求职准备的领域知识。固定输出：核心概念、常见技术栈、工程难点、典型面试问题、学习优先级、可验证作品证据。覆盖 AI Agent、大模型应用、数据科学、数据分析、算法、AI for Science 和生信算法。必须区分稳定的通用知识与依赖具体公司/JD的推断；没有来源或完整 JD 时明确标注“待核验”，不得编造岗位、公司要求或链接。",
+    "trigger_keywords": ["岗位", "JD", "岗位知识", "知识补充", "能力地图", "技术栈", "AI Agent", "大模型", "数据科学", "数据分析", "AI for Science", "生信"],
+    "tools": ["local_docs", "web_search"],
+    "model_profile": "knowledge",
+    "enabled": true,
+    "timeout_seconds": 60.0
   },
   {
     "role_id": "resume_strategist",
@@ -26,8 +39,9 @@
     "system_prompt": "只根据已有项目证据改写简历，不虚构指标。输出问题、方法、结果、指标。",
     "trigger_keywords": ["简历", "bullet", "经历", "投递"],
     "tools": ["local_docs"],
-    "model_profile": "default",
-    "enabled": true
+    "model_profile": "reliable",
+    "enabled": true,
+    "timeout_seconds": 60.0
   },
   {
     "role_id": "portfolio_coach",
@@ -37,7 +51,8 @@
     "trigger_keywords": ["作品", "项目", "MVP", "GitHub", "展示"],
     "tools": ["local_docs"],
     "model_profile": "default",
-    "enabled": true
+    "enabled": true,
+    "timeout_seconds": 60.0
   },
   {
     "role_id": "interview_coach",
@@ -47,7 +62,8 @@
     "trigger_keywords": ["面试", "问题", "学习", "复习"],
     "tools": ["local_docs"],
     "model_profile": "default",
-    "enabled": true
+    "enabled": true,
+    "timeout_seconds": 60.0
   },
   {
     "role_id": "judge",
@@ -57,7 +73,7 @@
     "trigger_keywords": [],
     "tools": [],
     "model_profile": "judge",
-    "enabled": true
+    "enabled": true,
+    "timeout_seconds": 60.0
   }
 ]
-

@@ -1,0 +1,28 @@
+[
+  {
+    "model": "qwen3.5-flash",
+    "runs": 1,
+    "successful_runs": 1,
+    "median_latency_ms": 47609.41,
+    "median_section_hits": 4,
+    "section_total": 6,
+    "median_output_tokens": 4535,
+    "notes": "Provider usage included reasoning tokens; missed two explicit headings."
+  },
+  {
+    "model": "Qwen/Qwen2.5-32B-Instruct",
+    "runs": 1,
+    "successful_runs": 1,
+    "median_latency_ms": 14246.15,
+    "median_section_hits": 5,
+    "section_total": 6,
+    "median_output_tokens": 320,
+    "notes": "Fastest successful model in this single-run smoke test."
+  },
+  {
+    "model": "doubao-seed-1-6-flash-250715",
+    "runs": 1,
+    "successful_runs": 0,
+    "notes": "The configured router returned an HTTP status error."
+  }
+]

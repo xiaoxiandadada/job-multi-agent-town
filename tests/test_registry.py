@@ -34,3 +34,25 @@ def test_duplicate_role_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="already exists"):
         registry.add(make_role())
 
+
+def test_from_seed_adds_missing_seed_roles_without_removing_custom_roles(tmp_path):
+    runtime_path = tmp_path / "runtime-roles.json"
+    seed_path = tmp_path / "seed-roles.json"
+    registry = RoleRegistry(runtime_path)
+    registry.add(make_role("custom_role"))
+    initial_version = registry.version
+    seed_path.write_text(
+        json.dumps(
+            [make_role("seed_role").model_dump()],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    merged = RoleRegistry.from_seed(runtime_path, seed_path)
+
+    assert {role.role_id for role in merged.list_roles()} == {
+        "custom_role",
+        "seed_role",
+    }
+    assert merged.version == initial_version + 1

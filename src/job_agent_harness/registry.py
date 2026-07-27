@@ -20,12 +20,17 @@ class RoleRegistry:
     @classmethod
     def from_seed(cls, runtime_path: Path, seed_path: Path) -> "RoleRegistry":
         registry = cls(runtime_path)
-        if registry.version == 0 and not registry.list_roles(include_disabled=True):
-            seed_roles = [
-                RoleSpec.model_validate(item)
-                for item in json.loads(seed_path.read_text(encoding="utf-8"))
-            ]
-            registry.replace_all(seed_roles)
+        seed_roles = [
+            RoleSpec.model_validate(item)
+            for item in json.loads(seed_path.read_text(encoding="utf-8"))
+        ]
+        existing_roles = registry.list_roles(include_disabled=True)
+        existing_ids = {role.role_id for role in existing_roles}
+        missing_seed_roles = [
+            role for role in seed_roles if role.role_id not in existing_ids
+        ]
+        if missing_seed_roles:
+            registry.replace_all([*existing_roles, *missing_seed_roles])
         return registry
 
     def _read(self) -> dict:
@@ -77,4 +82,3 @@ class RoleRegistry:
         }
         self._write(payload)
         return payload["version"]
-

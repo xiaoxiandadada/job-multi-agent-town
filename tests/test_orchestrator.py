@@ -60,6 +60,32 @@ async def test_parallel_mode_reduces_wall_latency(registry):
     assert parallel.metrics.parallel_speedup_estimate > 1.5
 
 
+async def test_role_timeout_includes_waiting_for_concurrency_slot(tmp_path):
+    timeout_registry = RoleRegistry(tmp_path / "timeout-roles.json")
+    slow_roles = [
+        role("first", "任务"),
+        role("second", "任务"),
+        role("judge", "不会自动触发", "judge"),
+    ]
+    slow_roles[0].timeout_seconds = 1
+    slow_roles[1].timeout_seconds = 1
+    timeout_registry.replace_all(slow_roles)
+    client = MockModelClient(latency_seconds=1.2)
+
+    report = await MultiAgentOrchestrator(
+        timeout_registry, client, max_concurrency=1
+    ).run(
+        RunRequest(
+            query="任务",
+            requested_roles=["first", "second"],
+            mode="parallel",
+            use_judge=False,
+        )
+    )
+
+    assert [result.status for result in report.results] == ["timeout", "timeout"]
+
+
 async def test_judge_is_a_separate_model_call(registry):
     client = MockModelClient()
     report = await MultiAgentOrchestrator(registry, client).run(
@@ -70,3 +96,38 @@ async def test_judge_is_a_separate_model_call(registry):
     assert report.metrics.model_calls == 2
     assert report.results[-1].role_id == "judge"
 
+
+async def test_collaborative_mode_passes_context_to_action_agents(tmp_path):
+    collaborative_registry = RoleRegistry(tmp_path / "collaborative-roles.json")
+    collaborative_registry.replace_all(
+        [
+            role("jd_analyst", "JD"),
+            role("job_knowledge_curator", "岗位知识"),
+            role("resume_strategist", "简历"),
+            role("judge", "不会自动触发", "judge"),
+        ]
+    )
+    client = MockModelClient()
+
+    report = await MultiAgentOrchestrator(
+        collaborative_registry, client
+    ).run(
+        RunRequest(
+            query="分析目标岗位并改写简历",
+            requested_roles=[
+                "jd_analyst",
+                "job_knowledge_curator",
+                "resume_strategist",
+            ],
+            mode="collaborative",
+            use_judge=False,
+        )
+    )
+
+    assert set(client.calls[:2]) == {"jd_analyst", "job_knowledge_curator"}
+    assert client.calls[2] == "resume_strategist"
+    resume_query = dict(client.queries)["resume_strategist"]
+    assert "上游 Agent" in resume_query
+    assert "jd_analyst" in resume_query
+    assert "job_knowledge_curator" in resume_query
+    assert report.metrics.model_calls == 3

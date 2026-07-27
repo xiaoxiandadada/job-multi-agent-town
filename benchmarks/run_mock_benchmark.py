@@ -46,7 +46,7 @@ async def main() -> None:
         registry = build_registry(Path(tmp) / "roles.json")
         query = "分析 JD、优化简历，并规划作品"
         rows = []
-        for mode in ("single", "sequential", "parallel"):
+        for mode in ("single", "sequential", "parallel", "collaborative"):
             report = await MultiAgentOrchestrator(
                 registry, MockModelClient(latency_seconds=0.1)
             ).run(RunRequest(query=query, mode=mode, use_judge=False))

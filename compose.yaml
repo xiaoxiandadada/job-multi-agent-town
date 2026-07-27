@@ -1,0 +1,35 @@
+services:
+  bot:
+    build: .
+    command: job-agent-feishu
+    env_file:
+      - .env
+    environment:
+      JOB_AGENT_PROJECT_ROOT: /app
+      JOB_AGENT_DATA_DIR: /data
+      JOB_AGENT_PREPARE_DIR: /prepare
+    restart: unless-stopped
+    volumes:
+      - job-agent-data:/data
+      - ${JOB_AGENT_PREPARE_HOST_DIR:-../../prepare}:/prepare:ro
+
+  api:
+    build: .
+    command: job-agent-api
+    profiles:
+      - api
+    env_file:
+      - .env
+    environment:
+      JOB_AGENT_PROJECT_ROOT: /app
+      JOB_AGENT_DATA_DIR: /data
+      JOB_AGENT_PREPARE_DIR: /prepare
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    volumes:
+      - job-agent-data:/data
+      - ${JOB_AGENT_PREPARE_HOST_DIR:-../../prepare}:/prepare:ro
+
+volumes:
+  job-agent-data:
