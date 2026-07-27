@@ -27,11 +27,32 @@ if [[ ${#secret} -lt 8 || ${#secret} -gt 256 || "$secret" == *[[:space:]]* ]]; t
   echo "Clipboard does not contain a valid App Secret" >&2
   exit 1
 fi
+trap 'pbcopy </dev/null' EXIT
 
 project_dir="${0:A:h:h}"
 env_file="$project_dir/.env"
 if [[ ! -f "$env_file" ]]; then
   echo "Missing $env_file" >&2
+  exit 1
+fi
+
+app_id_key="${key%_SECRET}_ID"
+app_id=""
+while IFS= read -r line || [[ -n "$line" ]]; do
+  if [[ "$line" == "$app_id_key="* ]]; then
+    app_id="${line#*=}"
+    break
+  fi
+done <"$env_file"
+if [[ "$app_id" != cli_* ]]; then
+  echo "Missing or invalid $app_id_key" >&2
+  exit 1
+fi
+
+if ! printf '%s' "$secret" \
+  | "$project_dir/.venv/bin/python" \
+      "$project_dir/scripts/verify_feishu_credential.py" "$app_id"; then
+  echo "$key was not stored because credential verification failed" >&2
   exit 1
 fi
 
