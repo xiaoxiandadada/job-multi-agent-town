@@ -7,8 +7,14 @@
     "trigger_keywords": ["岗位", "秋招", "校招", "招聘", "机会"],
     "tools": ["web_search"],
     "model_profile": "reliable",
+    "workflow_stage": "context",
     "enabled": true,
-    "timeout_seconds": 75.0
+    "timeout_seconds": 75.0,
+    "town_place": "机会驿站",
+    "town_icon": "📡",
+    "town_x": 13,
+    "town_y": 20,
+    "schedule": ["核验届别与岗位类型", "检查官方来源", "更新机会优先级"]
   },
   {
     "role_id": "jd_analyst",
@@ -18,8 +24,14 @@
     "trigger_keywords": ["JD", "职责", "要求", "关键词", "匹配"],
     "tools": ["local_docs"],
     "model_profile": "reliable",
+    "workflow_stage": "context",
     "enabled": true,
-    "timeout_seconds": 60.0
+    "timeout_seconds": 60.0,
+    "town_place": "JD 研究所",
+    "town_icon": "🔎",
+    "town_x": 33,
+    "town_y": 17,
+    "schedule": ["提取硬要求", "区分加分项", "生成技能缺口"]
   },
   {
     "role_id": "job_knowledge_curator",
@@ -29,8 +41,14 @@
     "trigger_keywords": ["岗位", "JD", "岗位知识", "知识补充", "能力地图", "技术栈", "AI Agent", "大模型", "数据科学", "数据分析", "AI for Science", "生信"],
     "tools": ["local_docs", "web_search"],
     "model_profile": "knowledge",
+    "workflow_stage": "context",
     "enabled": true,
-    "timeout_seconds": 60.0
+    "timeout_seconds": 60.0,
+    "town_place": "知识图书馆",
+    "town_icon": "📚",
+    "town_x": 76,
+    "town_y": 20,
+    "schedule": ["补充领域知识", "整理技术栈", "安排学习优先级"]
   },
   {
     "role_id": "resume_strategist",
@@ -40,8 +58,14 @@
     "trigger_keywords": ["简历", "bullet", "经历", "投递"],
     "tools": ["local_docs"],
     "model_profile": "reliable",
+    "workflow_stage": "action",
     "enabled": true,
-    "timeout_seconds": 60.0
+    "timeout_seconds": 60.0,
+    "town_place": "简历工坊",
+    "town_icon": "📝",
+    "town_x": 16,
+    "town_y": 68,
+    "schedule": ["选择简历版本", "映射项目证据", "改写量化 bullet"]
   },
   {
     "role_id": "portfolio_coach",
@@ -50,9 +74,15 @@
     "system_prompt": "给出最小可验证作品动作、技术栈、样例数据和验收指标。",
     "trigger_keywords": ["作品", "项目", "MVP", "GitHub", "展示"],
     "tools": ["local_docs"],
-    "model_profile": "default",
+    "model_profile": "reliable",
+    "workflow_stage": "action",
     "enabled": true,
-    "timeout_seconds": 60.0
+    "timeout_seconds": 60.0,
+    "town_place": "作品车库",
+    "town_icon": "🛠️",
+    "town_x": 39,
+    "town_y": 72,
+    "schedule": ["选择最小作品动作", "定义验收指标", "产出展示材料"]
   },
   {
     "role_id": "interview_coach",
@@ -61,9 +91,15 @@
     "system_prompt": "问题必须映射到 JD 与项目证据，并包含追问和评分 rubric。",
     "trigger_keywords": ["面试", "问题", "学习", "复习"],
     "tools": ["local_docs"],
-    "model_profile": "default",
+    "model_profile": "reliable",
+    "workflow_stage": "action",
     "enabled": true,
-    "timeout_seconds": 60.0
+    "timeout_seconds": 60.0,
+    "town_place": "面试竞技场",
+    "town_icon": "🎙️",
+    "town_x": 70,
+    "town_y": 70,
+    "schedule": ["生成核心题目", "设计追问", "制定评分 rubric"]
   },
   {
     "role_id": "judge",
@@ -73,7 +109,13 @@
     "trigger_keywords": [],
     "tools": [],
     "model_profile": "judge",
+    "workflow_stage": "judge",
     "enabled": true,
-    "timeout_seconds": 60.0
+    "timeout_seconds": 60.0,
+    "town_place": "证据审判塔",
+    "town_icon": "⚖️",
+    "town_x": 86,
+    "town_y": 50,
+    "schedule": ["检查来源", "标记冲突与遗漏", "发布可执行结论"]
   }
 ]

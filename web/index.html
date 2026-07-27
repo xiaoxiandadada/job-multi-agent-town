@@ -152,6 +152,7 @@
     }
     .building:hover, .building.selected { border-color: #5b9b83; transform: translate(-50%,-53%); }
     .building.running { filter: drop-shadow(0 0 13px rgba(124,242,189,.24)); }
+    .building.disabled { opacity: .42; filter: grayscale(.75); }
     .building-icon { font-size: 20px; display: block; margin-bottom: 5px; }
     .building-name { display: block; font-size: 12px; font-weight: 700; }
     .building-role { display: block; margin-top: 3px; color: var(--muted); font: 9px ui-monospace, monospace; }
@@ -174,6 +175,7 @@
     .town-agent.running .sprite { animation: spriteBob .65s steps(2,end) infinite; box-shadow: 0 5px 0 rgba(0,0,0,.24), 0 0 16px var(--green); }
     .town-agent.ok .sprite { background: linear-gradient(180deg, #c8dcff 0 40%, #3b70a7 41%); }
     .town-agent.error .sprite, .town-agent.timeout .sprite { background: linear-gradient(180deg, #ffc2bc 0 40%, #9b4038 41%); }
+    .town-agent.disabled { opacity: .34; filter: grayscale(1); }
     @keyframes spriteBob { 50% { transform: translateY(-4px); } }
     .sprite-name {
       position: absolute; top: 42px; left: 50%; transform: translateX(-50%); white-space: nowrap;
@@ -227,6 +229,10 @@
     }
     .town-schedule li::before { content: "◇"; margin-right: 5px; color: var(--green); }
     .town-memory-empty { color: var(--muted); font-size: 11px; padding: 18px 0; }
+    .town-reflection {
+      display: none; margin: 0 0 12px; padding: 9px 10px; border-left: 2px solid var(--amber);
+      color: #d7c8a6; background: rgba(245,200,115,.06); font-size: 10px; line-height: 1.55;
+    }
     .pipeline {
       display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
       border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
@@ -272,6 +278,7 @@
     .pill.running { background: rgba(124,242,189,.1); color: var(--green); }
     .pill.ok, .pill.completed { color: var(--green); }
     .pill.error, .pill.timeout { color: var(--red); background: rgba(255,136,124,.1); }
+    .pill.disabled { color: #72827c; }
     .agent h3 { margin: 24px 0 4px; font-size: 17px; letter-spacing: -.02em; }
     .role-id { color: var(--muted); font: 11px ui-monospace, monospace; }
     .agent-output {
@@ -297,6 +304,11 @@
       background: var(--green); font-weight: 800; min-width: 150px;
     }
     .primary:disabled { opacity: .55; cursor: wait; }
+    .secondary {
+      border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px;
+      color: var(--muted); background: #0a1511; font-size: 11px;
+    }
+    .secondary:hover { color: var(--text); border-color: #4b7e6d; }
     .check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin-top: 7px; }
     .check input { width: auto; margin: 0; accent-color: var(--green-2); }
     pre {
@@ -408,6 +420,7 @@
           <span id="town-memory-role">—</span>
         </div>
         <ul class="town-schedule" id="town-schedule"></ul>
+        <div class="town-reflection" id="town-reflection"></div>
         <div class="town-stream" id="town-memory">
           <div class="town-memory-empty">点击一座建筑查看角色记忆。</div>
         </div>
@@ -453,11 +466,25 @@
       <details>
         <summary>一键添加逻辑角色</summary>
         <div class="role-form">
+          <select id="role-template" class="wide">
+            <option value="">选择角色模板（可一键创建）</option>
+            <option value="bioinformatics_coach">生信算法教练</option>
+            <option value="data_science_coach">数据科学教练</option>
+            <option value="agent_eval_engineer">Agent 评测工程师</option>
+          </select>
+          <button class="secondary wide" onclick="addRoleFromTemplate()">从模板立即创建并启用</button>
           <input id="role-id" placeholder="role_id">
           <input id="role-name" placeholder="显示名称">
           <input id="role-goal" class="wide" placeholder="角色目标">
           <textarea id="role-prompt" placeholder="System prompt"></textarea>
           <input id="role-keywords" class="wide" placeholder="触发词，逗号分隔">
+          <select id="role-stage">
+            <option value="action">action · 产出行动</option>
+            <option value="context">context · 先提供证据</option>
+          </select>
+          <input id="role-place" placeholder="建筑名称">
+          <input id="role-icon" placeholder="建筑图标，如 🧬">
+          <input id="role-schedule" placeholder="日程，逗号分隔">
           <button class="primary" onclick="addRole()">添加并启用</button>
         </div>
       </details>
@@ -517,8 +544,12 @@ function groupRuns(events) {
 }
 
 function roleState(role, run) {
+  if (!role.enabled) return { status: 'disabled', phase: '—', model: '—', latency: null, output: '角色已暂停，不参与自动路由' };
   if (!run) return { status: 'idle', phase: '—', model: '—', latency: null, output: role.goal };
-  const events = run.events.filter(event => event.role_id === role.role_id);
+  const events = run.events.filter(event =>
+    event.role_id === role.role_id
+    && ['agent_started','agent_completed','daily_push_started','daily_push_completed'].includes(event.kind)
+  );
   const last = events.at(-1);
   if (!last) {
     const selected = run.events.some(event =>
@@ -527,11 +558,26 @@ function roleState(role, run) {
     return { status: selected ? 'queued' : 'idle', phase: '—', model: '—', latency: null, output: role.goal };
   }
   return {
-    status: last.kind === 'agent_started' ? 'running' : last.status,
+    status: ['agent_started','daily_push_started'].includes(last.kind) ? 'running' : last.status,
     phase: last.phase,
     model: last.model || 'pending',
     latency: last.latency_ms,
     output: last.output_excerpt || last.error || role.goal
+  };
+}
+
+function layoutFor(role, index) {
+  const fallback = townLayout[role.role_id] || {
+    x: 12 + (index % 4) * 24,
+    y: index < 4 ? 18 : 76,
+    icon: '🏠',
+    place: role.display_name
+  };
+  return {
+    x: role.town_x ?? fallback.x,
+    y: role.town_y ?? fallback.y,
+    icon: role.town_icon || fallback.icon,
+    place: role.town_place || fallback.place
   };
 }
 
@@ -547,12 +593,7 @@ function ensureTownElements() {
   const buildings = $('#town-buildings');
   const agents = $('#town-agents');
   state.roles.forEach((role, index) => {
-    const layout = townLayout[role.role_id] || {
-      x: 12 + (index % 4) * 24,
-      y: index < 4 ? 18 : 76,
-      icon: '🏠',
-      place: role.display_name
-    };
+    const layout = layoutFor(role, index);
     let building = buildings.querySelector(`[data-role="${CSS.escape(role.role_id)}"]`);
     if (!building) {
       building = document.createElement('button');
@@ -603,10 +644,7 @@ function renderTown(run, phase) {
 
   state.roles.forEach((role, index) => {
     const value = roleState(role, run);
-    const layout = townLayout[role.role_id] || {
-      x: 12 + (index % 4) * 24,
-      y: index < 4 ? 18 : 76
-    };
+    const layout = layoutFor(role, index);
     const building = document.querySelector(`.building[data-role="${CSS.escape(role.role_id)}"]`);
     const agent = document.querySelector(`.town-agent[data-agent="${CSS.escape(role.role_id)}"]`);
     const selected = role.role_id === focusRoleId;
@@ -616,7 +654,7 @@ function renderTown(run, phase) {
     const targetX = isQueued ? queuedX : layout.x + (index % 2 ? 7 : -7);
     const targetY = isQueued ? queuedY : layout.y + 11;
 
-    building.className = `building ${value.status === 'running' ? 'running' : ''} ${selected ? 'selected' : ''}`.trim();
+    building.className = `building ${value.status === 'running' ? 'running' : ''} ${value.status === 'disabled' ? 'disabled' : ''} ${selected ? 'selected' : ''}`.trim();
     agent.className = `town-agent ${value.status} ${selected ? 'selected' : ''}`;
     agent.style.left = `${targetX}%`;
     agent.style.top = `${targetY}%`;
@@ -628,8 +666,8 @@ function renderTown(run, phase) {
   if (!focusRole) return;
   const focus = roleState(focusRole, run);
   const townAgent = state.town.agents?.find(agent => agent.role_id === focusRoleId);
-  const place = townLayout[focusRole.role_id]?.place || focusRole.display_name;
-  const label = ({idle:'待命', queued:'等待调度', running:'工作中', ok:'已完成', completed:'已完成', error:'失败', timeout:'超时'})[focus.status] || focus.status;
+  const place = townAgent?.place || layoutFor(focusRole, state.roles.indexOf(focusRole)).place;
+  const label = ({disabled:'已暂停', idle:'待命', queued:'等待调度', running:'工作中', ok:'已完成', completed:'已完成', error:'失败', timeout:'超时'})[focus.status] || focus.status;
   $('#town-detail').innerHTML = `<strong>${escapeHtml(place)} · ${escapeHtml(focusRole.display_name)}</strong>
     <span>${escapeHtml(short(townAgent?.current_action || focus.output, 210))}</span>
     <code>${escapeHtml(label)} · ${escapeHtml(focus.model)} · ${fmtMs(focus.latency)}</code>`;
@@ -638,10 +676,15 @@ function renderTown(run, phase) {
   $('#town-schedule').innerHTML = (townAgent?.schedule || []).map(item =>
     `<li>${escapeHtml(item)}</li>`
   ).join('');
-  const memories = townAgent?.memories || [];
+  const reflection = townAgent?.reflection || '';
+  $('#town-reflection').style.display = reflection ? 'block' : 'none';
+  $('#town-reflection').textContent = reflection ? `反思：${reflection}` : '';
+  const memories = townAgent?.memory_stream?.length
+    ? townAgent.memory_stream
+    : (townAgent?.memories || []);
   $('#town-memory').innerHTML = memories.length ? memories.slice().reverse().map(memory =>
     `<div class="town-entry"><time>${escapeHtml(fmtTownTime(memory.timestamp))}</time>
-      <code>${escapeHtml(memory.kind)}</code><span>${escapeHtml(short(memory.text, 145))}</span></div>`
+      <code>${escapeHtml(memory.kind)}${memory.importance == null ? '' : ' · ' + memory.importance.toFixed(2)}</code><span>${escapeHtml(short(memory.text, 145))}</span></div>`
   ).join('') : '<div class="town-memory-empty">该角色还没有形成运行记忆。</div>';
 
   const timeline = state.town.timeline || [];
@@ -656,8 +699,11 @@ function render() {
   const current = runs[0];
   const completeEvent = current?.events.findLast(event => event.kind === 'run_completed');
   const failedEvent = current?.events.findLast(event => event.kind === 'run_failed');
+  const completedAgents = current?.events.filter(event =>
+    ['agent_completed','daily_push_completed'].includes(event.kind)
+  ) || [];
+  const partialFailure = completedAgents.some(event => !['ok','completed'].includes(event.status));
   const phase = failedEvent ? 'failed' : activePhase(current);
-  const completedAgents = current?.events.filter(event => event.kind === 'agent_completed') || [];
   const okCount = completedAgents.filter(event => event.status === 'ok').length;
   const expectedRoleIds = new Set(
     current?.events.flatMap(event => event.selected_role_ids || []) || []
@@ -670,10 +716,10 @@ function render() {
 
   $('#runtime-name').textContent = `${state.runtime.orchestrator || 'Runtime'} · ${state.roles.length} roles · live`;
   $('#run-id').textContent = current ? `RUN ${current.id.slice(0,8).toUpperCase()}` : 'NO RUN YET';
-  $('#run-state').textContent = failedEvent ? '运行失败' : completeEvent ? '运行完成' : current ? 'Agent 正在协作' : '等待任务';
+  $('#run-state').textContent = failedEvent ? '运行失败' : completeEvent ? (partialFailure ? '运行完成（含失败）' : '运行完成') : current ? 'Agent 正在协作' : '等待任务';
   $('#run-query').textContent = current?.first.query_excerpt || '从飞书 @角色，或在下方启动一次团队任务。';
   $('#m-phase').textContent = phase.toUpperCase();
-  $('#m-complete').textContent = `${okCount} / ${expectedRoleIds.size || state.roles.length}`;
+  $('#m-complete').textContent = `${okCount} / ${expectedRoleIds.size || state.roles.filter(role => role.enabled).length}`;
   $('#m-calls').textContent = metrics.model_calls ?? completedAgents.length;
   $('#m-latency').textContent = fmtMs(metrics.wall_latency_ms ?? elapsed);
   $('#m-speedup').textContent = metrics.parallel_speedup_estimate ? `${metrics.parallel_speedup_estimate.toFixed(2)}×` : '—';
@@ -696,12 +742,13 @@ function render() {
   $('#agent-caption').textContent = `${state.roles.length} 个逻辑角色 · 状态每 1.5 秒刷新`;
   $('#agents').innerHTML = state.roles.map((role, index) => {
     const value = roleState(role, current);
-    const label = ({idle:'IDLE', queued:'QUEUED', running:'RUNNING', ok:'DONE', completed:'DONE', error:'ERROR', timeout:'TIMEOUT'})[value.status] || value.status;
+    const label = ({disabled:'DISABLED', idle:'IDLE', queued:'QUEUED', running:'RUNNING', ok:'DONE', completed:'DONE', error:'ERROR', timeout:'TIMEOUT'})[value.status] || value.status;
     return `<article class="agent ${escapeHtml(value.status)}">
       <div class="agent-top"><span class="agent-index">AGENT ${String(index+1).padStart(2,'0')}</span><span class="pill ${escapeHtml(value.status)}">${escapeHtml(label)}</span></div>
       <h3>${escapeHtml(role.display_name)}</h3>
       <span class="role-id">${escapeHtml(role.role_id)}</span>
       <p class="agent-output">${escapeHtml(short(value.output))}</p>
+      <button class="secondary" onclick="toggleRole('${escapeHtml(role.role_id)}', ${role.enabled ? 'false' : 'true'})">${role.enabled ? '暂停角色' : '启用角色'}</button>
       <div class="agent-meta"><span>${escapeHtml(value.phase)}</span><span>${escapeHtml(value.model)}</span><span>${fmtMs(value.latency)}</span></div>
     </article>`;
   }).join('');
@@ -709,13 +756,16 @@ function render() {
   $('#runs').innerHTML = runs.length ? runs.slice(0, 12).map(run => {
     const done = run.events.find(event => event.kind === 'run_completed');
     const fail = run.events.find(event => event.kind === 'run_failed');
-    const agents = run.events.filter(event => event.kind === 'agent_completed');
+    const agents = run.events.filter(event =>
+      ['agent_completed','daily_push_completed'].includes(event.kind)
+    );
+    const partial = agents.some(event => !['ok','completed'].includes(event.status));
     const duration = done?.metrics?.wall_latency_ms ?? (Date.parse(run.last.timestamp)-Date.parse(run.first.timestamp));
     return `<tr>
       <td class="mono">${escapeHtml(run.id.slice(0,8))}</td>
       <td>${escapeHtml(run.first.orchestrator)}</td>
       <td>${escapeHtml(run.first.mode || '—')}</td>
-      <td>${fail ? 'error' : done ? 'completed' : 'running'}</td>
+      <td>${fail ? 'error' : done ? (partial ? 'partial' : 'completed') : 'running'}</td>
       <td>${agents.length}</td>
       <td class="mono">${fmtMs(duration)}</td>
       <td>${escapeHtml(short(run.first.query_excerpt, 70))}</td>
@@ -784,8 +834,54 @@ async function addRole() {
     goal: $('#role-goal').value,
     system_prompt: $('#role-prompt').value,
     trigger_keywords: $('#role-keywords').value.split(',').map(value => value.trim()).filter(Boolean),
-    tools: [], model_profile: 'default', enabled: true
+    tools: [],
+    model_profile: 'default',
+    workflow_stage: $('#role-stage').value,
+    enabled: true,
+    town_place: $('#role-place').value || null,
+    town_icon: $('#role-icon').value || '🏠',
+    schedule: $('#role-schedule').value.split(',').map(value => value.trim()).filter(Boolean)
   };
+  return createRole(body);
+}
+
+const roleTemplates = {
+  bioinformatics_coach: {
+    role_id:'bioinformatics_coach', display_name:'生信算法教练',
+    goal:'把生信算法岗位要求映射到可验证的项目证据',
+    system_prompt:'围绕生信算法岗位提供知识、项目和面试建议；区分已有证据与待核验推断。',
+    trigger_keywords:['生信','GWAS','单细胞'], tools:['local_docs'], model_profile:'knowledge',
+    workflow_stage:'action', enabled:true, town_place:'生信实验室', town_icon:'🧬',
+    schedule:['解析生信任务','映射分析流程','形成可验证证据']
+  },
+  data_science_coach: {
+    role_id:'data_science_coach', display_name:'数据科学教练',
+    goal:'把数据科学岗位要求转成分析方案和作品证据',
+    system_prompt:'围绕 SQL、统计推断、实验设计和数据产品输出可验证建议，不虚构数据。',
+    trigger_keywords:['数据科学','SQL','AB实验'], tools:['local_docs'], model_profile:'default',
+    workflow_stage:'action', enabled:true, town_place:'数据观测站', town_icon:'📊',
+    schedule:['提炼业务问题','设计分析方法','定义验收指标']
+  },
+  agent_eval_engineer: {
+    role_id:'agent_eval_engineer', display_name:'Agent 评测工程师',
+    goal:'设计 Agent、RAG 与工具调用的可复现评测方案',
+    system_prompt:'输出 golden set、指标、失败分类、回归门禁和成本延迟约束。',
+    trigger_keywords:['Agent评测','RAG评测','golden set'], tools:['local_docs'], model_profile:'reliable',
+    workflow_stage:'action', enabled:true, town_place:'评测控制室', town_icon:'🧪',
+    schedule:['建立样例集','定义指标','执行回归门禁']
+  }
+};
+
+async function addRoleFromTemplate() {
+  const template = roleTemplates[$('#role-template').value];
+  if (!template) {
+    $('#output').textContent = '请先选择一个角色模板。';
+    return;
+  }
+  await createRole(template);
+}
+
+async function createRole(body) {
   const response = await fetch('/api/roles', {
     method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body)
   });
@@ -795,6 +891,19 @@ async function addRole() {
     return;
   }
   $('#output').textContent = `角色 ${body.display_name} 已启用，registry version=${payload.registry_version}`;
+  await refresh();
+}
+
+async function toggleRole(roleId, enabled) {
+  const response = await fetch(`/api/roles/${encodeURIComponent(roleId)}`, {
+    method:'PATCH', headers:{'content-type':'application/json'}, body:JSON.stringify({enabled})
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    $('#output').textContent = `更新角色失败：${JSON.stringify(payload)}`;
+    return;
+  }
+  $('#output').textContent = `${payload.role.display_name} 已${enabled ? '启用' : '暂停'}，registry version=${payload.registry_version}`;
   await refresh();
 }
 

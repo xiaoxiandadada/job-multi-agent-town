@@ -69,4 +69,12 @@ run `405a5e40` 完成 3/3 调用：
 - 总耗时：60.24 秒；
 - `jd_analyst → resume_strategist` 的 `handoff_created` 已写入双方记忆流。
 
+### RPG 认知层实跑补充（2026-07-27）
+
+认知层上线后的首次 `portfolio_coach` 单角色任务仍走
+`default/qwen3.5-flash`，在 60 秒上限触发 timeout；失败被完整写入该角色的
+observation memory，没有伪装成成功结果。结合前述 A/B 中 Qwen2.5-32B 的更低延迟
+和更高结构完整度，`portfolio_coach` 与 `interview_coach` 的生产配置已改为
+`reliable` profile。`default` profile 继续保留给低风险探索任务和对照实验。
+
 该分层来自同一 API 路由下的实测，不代表模型在所有任务上的绝对排序。

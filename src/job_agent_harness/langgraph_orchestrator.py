@@ -8,7 +8,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from .models import AgentResult, RunMetrics, RunReport, RunRequest
-from .orchestrator import CONTEXT_ROLE_IDS, MultiAgentOrchestrator
+from .orchestrator import MultiAgentOrchestrator, workflow_stage
 
 
 class JobAgentGraphState(TypedDict, total=False):
@@ -88,12 +88,12 @@ class LangGraphOrchestrator:
             "context_role_ids": [
                 role_id
                 for role_id in selected_ids
-                if role_id in CONTEXT_ROLE_IDS
+                if workflow_stage(self.base.registry.get(role_id)) == "context"
             ],
             "action_role_ids": [
                 role_id
                 for role_id in selected_ids
-                if role_id not in CONTEXT_ROLE_IDS
+                if workflow_stage(self.base.registry.get(role_id)) == "action"
             ],
         }
 

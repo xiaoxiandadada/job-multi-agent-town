@@ -7,10 +7,12 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from .activity import ActivityEvent
-from .models import RoleSpec, RunReport, RunRequest
+from .cognition import AgentMemory, RetrievedMemory
+from .models import RolePatch, RoleSpec, RunReport, RunRequest
 from .runtime import (
     ROOT,
     build_activity_store,
+    build_memory_store,
     build_orchestrator,
     build_registry,
 )
@@ -21,7 +23,8 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Job Agent Studio", version="0.1.0")
     registry = build_registry()
     activity_store = build_activity_store()
-    orchestrator = build_orchestrator(registry)
+    memory_store = build_memory_store()
+    orchestrator = build_orchestrator(registry, memory_store)
 
     @app.get("/")
     async def index():
@@ -61,6 +64,7 @@ def create_app() -> FastAPI:
         return build_town_snapshot(
             registry,
             activity_store.read(limit=1200),
+            memory_store=memory_store,
         )
 
     @app.get("/api/roles", response_model=list[RoleSpec])
@@ -74,6 +78,50 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"role": role, "registry_version": version}
+
+    @app.patch("/api/roles/{role_id}")
+    async def update_role(role_id: str, patch: RolePatch):
+        try:
+            role, version = registry.update(
+                role_id,
+                **patch.model_dump(exclude_unset=True),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"role": role, "registry_version": version}
+
+    @app.get(
+        "/api/agents/{role_id}/memories",
+        response_model=list[AgentMemory],
+    )
+    async def agent_memories(
+        role_id: str,
+        limit: int = Query(default=100, ge=1, le=2000),
+    ):
+        try:
+            registry.get(role_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return memory_store.list(role_id=role_id, limit=limit)
+
+    @app.get(
+        "/api/agents/{role_id}/memories/search",
+        response_model=list[RetrievedMemory],
+    )
+    async def search_agent_memories(
+        role_id: str,
+        query: str = Query(min_length=1, max_length=2000),
+        limit: int = Query(default=4, ge=1, le=20),
+    ):
+        try:
+            registry.get(role_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return memory_store.retrieve(
+            role_id=role_id,
+            query=query,
+            limit=limit,
+        )
 
     @app.post("/api/runs", response_model=RunReport)
     async def run_agents(request: RunRequest):

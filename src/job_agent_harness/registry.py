@@ -25,12 +25,35 @@ class RoleRegistry:
             for item in json.loads(seed_path.read_text(encoding="utf-8"))
         ]
         existing_roles = registry.list_roles(include_disabled=True)
-        existing_ids = {role.role_id for role in existing_roles}
+        seeds_by_id = {role.role_id: role for role in seed_roles}
+        merged_roles: list[RoleSpec] = []
+        seed_managed_fields = {
+            "workflow_stage",
+            "town_place",
+            "town_icon",
+            "town_x",
+            "town_y",
+            "schedule",
+        }
+        changed = False
+        for role in existing_roles:
+            seed = seeds_by_id.get(role.role_id)
+            if seed is None:
+                merged_roles.append(role)
+                continue
+            additions = {
+                field: getattr(seed, field)
+                for field in seed_managed_fields
+                if field not in role.model_fields_set
+            }
+            merged_roles.append(role.model_copy(update=additions))
+            changed = changed or bool(additions)
+        existing_ids = {role.role_id for role in merged_roles}
         missing_seed_roles = [
             role for role in seed_roles if role.role_id not in existing_ids
         ]
-        if missing_seed_roles:
-            registry.replace_all([*existing_roles, *missing_seed_roles])
+        if missing_seed_roles or changed:
+            registry.replace_all([*merged_roles, *missing_seed_roles])
         return registry
 
     def _read(self) -> dict:
@@ -71,6 +94,18 @@ class RoleRegistry:
         payload["version"] += 1
         self._write(payload)
         return payload["version"]
+
+    def update(self, role_id: str, **changes) -> tuple[RoleSpec, int]:
+        payload = self._read()
+        for index, item in enumerate(payload["roles"]):
+            if item["role_id"] != role_id:
+                continue
+            role = RoleSpec.model_validate({**item, **changes, "role_id": role_id})
+            payload["roles"][index] = role.model_dump()
+            payload["version"] += 1
+            self._write(payload)
+            return role, payload["version"]
+        raise KeyError(f"unknown role: {role_id}")
 
     def replace_all(self, roles: list[RoleSpec]) -> int:
         role_ids = [role.role_id for role in roles]

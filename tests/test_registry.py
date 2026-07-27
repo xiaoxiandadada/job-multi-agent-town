@@ -27,6 +27,24 @@ def test_add_role_is_persisted_and_versioned(tmp_path):
     assert json.loads((tmp_path / "roles.json").read_text())["version"] == 1
 
 
+def test_update_role_is_persisted_and_versioned(tmp_path):
+    registry = RoleRegistry(tmp_path / "roles.json")
+    registry.add(make_role())
+
+    role, version = registry.update(
+        "test_role",
+        enabled=False,
+        town_place="测试工坊",
+        workflow_stage="context",
+    )
+
+    assert version == 2
+    assert role.enabled is False
+    assert registry.get("test_role").town_place == "测试工坊"
+    assert registry.get("test_role").workflow_stage == "context"
+    assert json.loads((tmp_path / "roles.json").read_text())["version"] == 2
+
+
 def test_duplicate_role_is_rejected(tmp_path):
     registry = RoleRegistry(tmp_path / "roles.json")
     registry.add(make_role())
@@ -56,3 +74,48 @@ def test_from_seed_adds_missing_seed_roles_without_removing_custom_roles(tmp_pat
         "seed_role",
     }
     assert merged.version == initial_version + 1
+
+
+def test_from_seed_backfills_new_town_fields_without_overwriting_user_fields(
+    tmp_path,
+):
+    runtime_path = tmp_path / "runtime-roles.json"
+    seed_path = tmp_path / "seed-roles.json"
+    runtime_path.write_text(
+        json.dumps(
+            {
+                "version": 4,
+                "roles": [
+                    {
+                        "role_id": "job_scout",
+                        "display_name": "用户自定义侦察员",
+                        "goal": "发现并核验符合范围的岗位机会",
+                        "system_prompt": "只输出有官方来源且范围明确的岗位。",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    seeded = make_role("job_scout").model_copy(
+        update={
+            "display_name": "种子名称",
+            "workflow_stage": "context",
+            "town_place": "机会驿站",
+            "town_icon": "📡",
+            "schedule": ["核验岗位", "检查来源"],
+        }
+    )
+    seed_path.write_text(
+        json.dumps([seeded.model_dump()], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    registry = RoleRegistry.from_seed(runtime_path, seed_path)
+    role = registry.get("job_scout")
+
+    assert role.display_name == "用户自定义侦察员"
+    assert role.workflow_stage == "context"
+    assert role.town_place == "机会驿站"
+    assert role.schedule == ["核验岗位", "检查来源"]

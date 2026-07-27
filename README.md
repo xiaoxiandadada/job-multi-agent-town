@@ -26,6 +26,10 @@
 - RPG 求职小镇：7 个角色拥有独立建筑和精灵，沿 LangGraph 阶段道路移动；不是
   预录动画，位置、气泡、状态、日程、记忆流、证据交接和延迟均来自
   `ActivityEvent`。
+- 生成式认知层：每个角色持久化 observation、handoff、plan 和 reflection；
+  下一次执行按相关性、重要性与新近度检索长期记忆并注入角色上下文。
+- 一键角色模板：网页可立即添加生信、数据科学或 Agent 评测角色，也可自定义
+  `workflow_stage`、建筑、图标、日程并即时启停，无需重启。
 - 角色日报：配置独立机器人后，七个角色分别推送自己负责的岗位、JD、学习、简历、
   作品、面试和审核内容。
 
@@ -98,6 +102,17 @@ uv run job-agent-feishu
 一个角色，`/ask` 是更直观的同义命令。`/job`、`/apply`、`/interview` 和 `/team`
 使用分阶段协作模式。
 网页端的“添加并立即启用”表单和 `/role-add` 共用同一个角色注册表。
+新增角色不只是一个名称：`workflow_stage=context` 会在上游证据阶段运行，
+`workflow_stage=action` 会接收 context Agent 的证据交接；角色的建筑、图标、
+日程和启停状态也会立即同步到小镇。
+
+长期记忆可通过 API 审计：
+
+```bash
+curl http://127.0.0.1:8000/api/agents/jd_analyst/memories
+curl --get http://127.0.0.1:8000/api/agents/jd_analyst/memories/search \
+  --data-urlencode 'query=Agent Evaluation golden set'
+```
 
 如果希望在群里直接使用不同机器人名称，可为每个 role 创建独立飞书自建应用，并
 把 App ID/App Secret 通过环境变量绑定到 role。所有身份仍由同一个进程托管：

@@ -5,8 +5,9 @@ import time
 import uuid
 
 from .activity import ActivityStore
+from .cognition import MemoryStore
 from .model_client import ModelClient
-from .models import AgentResult, RunMetrics, RunReport, RunRequest
+from .models import AgentResult, RoleSpec, RunMetrics, RunReport, RunRequest
 from .registry import RoleRegistry
 
 
@@ -17,6 +18,16 @@ CONTEXT_ROLE_IDS = {
 }
 
 
+def workflow_stage(role: RoleSpec) -> str:
+    if role.workflow_stage != "auto":
+        return role.workflow_stage
+    if role.role_id == "judge":
+        return "judge"
+    if role.role_id in CONTEXT_ROLE_IDS:
+        return "context"
+    return "action"
+
+
 class MultiAgentOrchestrator:
     def __init__(
         self,
@@ -24,12 +35,14 @@ class MultiAgentOrchestrator:
         model_client: ModelClient,
         max_concurrency: int = 4,
         activity_store: ActivityStore | None = None,
+        memory_store: MemoryStore | None = None,
         orchestrator_name: str = "asyncio",
     ):
         self.registry = registry
         self.model_client = model_client
         self.semaphore = asyncio.Semaphore(max(1, max_concurrency))
         self.activity_store = activity_store
+        self.memory_store = memory_store
         self.orchestrator_name = orchestrator_name
 
     def _record(self, **values) -> None:
@@ -38,10 +51,24 @@ class MultiAgentOrchestrator:
                 orchestrator=self.orchestrator_name,
                 **values,
             )
+        if (
+            self.memory_store is not None
+            and values.get("kind") == "handoff_created"
+        ):
+            summary = values.get("output", "")
+            for role_id in values.get("target_role_ids") or []:
+                self.memory_store.append(
+                    role_id=role_id,
+                    run_id=values["run_id"],
+                    kind="handoff",
+                    text=summary or "收到上游 Agent 的证据交接",
+                )
 
     def select_roles(self, request: RunRequest):
         roles = [
-            role for role in self.registry.list_roles() if role.role_id != "judge"
+            role
+            for role in self.registry.list_roles()
+            if workflow_stage(role) != "judge"
         ]
         if request.requested_roles:
             selected = [
@@ -73,6 +100,51 @@ class MultiAgentOrchestrator:
         phase: str = "action",
     ) -> AgentResult:
         started = time.perf_counter()
+        role_query = query
+        if self.memory_store is not None and run_id:
+            memories = self.memory_store.retrieve(
+                role_id=role.role_id,
+                query=query,
+                limit=4,
+            )
+            if memories:
+                memory_context = "\n".join(
+                    (
+                        f"- [{item.memory.kind}] {item.memory.text} "
+                        f"(score={item.score:.2f})"
+                    )
+                    for item in memories
+                )
+                role_query = (
+                    f"{query}\n\n"
+                    "以下是该角色从过去任务中检索到的长期记忆。"
+                    "仅在相关且仍然有效时使用，遇到过时信息要重新核验：\n"
+                    f"{memory_context}"
+                )
+                self._record(
+                    run_id=run_id,
+                    kind="memory_retrieved",
+                    status="completed",
+                    phase=phase,
+                    role_id=role.role_id,
+                    display_name=role.display_name,
+                    output=f"检索到 {len(memories)} 条长期记忆",
+                )
+            plan = self.memory_store.ensure_plan(
+                role_id=role.role_id,
+                run_id=run_id,
+                schedule=role.schedule,
+                query=query,
+            )
+            self._record(
+                run_id=run_id,
+                kind="plan_updated",
+                status="completed",
+                phase=phase,
+                role_id=role.role_id,
+                display_name=role.display_name,
+                output=plan.text,
+            )
         if run_id:
             self._record(
                 run_id=run_id,
@@ -81,11 +153,11 @@ class MultiAgentOrchestrator:
                 phase=phase,
                 role_id=role.role_id,
                 display_name=role.display_name,
-                query=query,
+                query=role_query,
             )
         try:
             reply = await asyncio.wait_for(
-                self._complete_role(role, query),
+                self._complete_role(role, role_query),
                 timeout=role.timeout_seconds,
             )
             result = AgentResult(
@@ -126,6 +198,32 @@ class MultiAgentOrchestrator:
                 output=result.output,
                 error=result.error,
             )
+            if self.memory_store is not None:
+                observation_text = (
+                    result.output
+                    if result.status == "ok"
+                    else f"{result.status}: {result.error or '没有输出'}"
+                )
+                self.memory_store.append(
+                    role_id=role.role_id,
+                    run_id=run_id,
+                    kind="observation",
+                    text=observation_text,
+                )
+                reflection = self.memory_store.maybe_reflect(
+                    role_id=role.role_id,
+                    run_id=run_id,
+                )
+                if reflection is not None:
+                    self._record(
+                        run_id=run_id,
+                        kind="reflection_created",
+                        status="completed",
+                        phase=phase,
+                        role_id=role.role_id,
+                        display_name=role.display_name,
+                        output=reflection.text,
+                    )
         return result
 
     async def _run_parallel(
@@ -195,10 +293,10 @@ class MultiAgentOrchestrator:
             )
         elif request.mode == "collaborative":
             context_roles = [
-                role for role in selected if role.role_id in CONTEXT_ROLE_IDS
+                role for role in selected if workflow_stage(role) == "context"
             ]
             action_roles = [
-                role for role in selected if role.role_id not in CONTEXT_ROLE_IDS
+                role for role in selected if workflow_stage(role) == "action"
             ]
             self._record(
                 run_id=run_id,

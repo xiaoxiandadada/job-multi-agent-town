@@ -57,6 +57,8 @@
   身份共享同一 Runtime、模型客户端、并发信号量和 Judge。
 - `httpx`：调用用户自己的 OpenAI-compatible API。
 - JSON `RoleRegistry`：版本化持久化角色，一键新增后立即参与路由。
+- append-only `MemoryStore`：保存每个角色的 observation、handoff、plan 与
+  reflection；运行前按新近度、相关性和重要性检索。
 
 项目保留纯 `asyncio` baseline。两者复用同一个
 `RoleSpec`、RoleRegistry、模型客户端和 RunReport，因此可以在不改变角色提示词的
@@ -94,6 +96,19 @@ SQLite/Postgres checkpointer。需要人工确认投递、修改简历或发送�
 副作用节点前用 `interrupt()` 暂停，用户在飞书点击确认后再用相同 `thread_id`
 恢复。这样 LangGraph 的价值在“可恢复状态”，而不是简单替代一次
 `asyncio.gather`。
+
+LangGraph checkpoint 与角色长期记忆是两个不同层次：
+
+- checkpoint 保存一次 graph/thread 执行到哪个 Node；
+- `MemoryStore` 保存角色跨 run 可复用的经验；
+- ActivityEvent 是给网页和审计使用的不可变运行轨迹。
+
+角色执行前，Runtime 从 `memories.jsonl` 取 top-k 记忆，score 为
+`0.38 × recency + 0.40 × relevance + 0.22 × importance`。检索结果只作为
+“可能过时、需要复核”的上下文；每次输出/失败成为 observation，context → action
+成为 handoff，累积经验形成不含隐藏推理的 reflection。这对应 Generative Agents
+论文中的 observation / planning / reflection，但语义被约束为求职任务，不模拟
+无关生活行为。
 
 切换方式：
 
@@ -169,16 +184,22 @@ Feishu App: 简历策略师          -> resume_strategist
   "system_prompt": "...",
   "trigger_keywords": ["生信", "GWAS", "单细胞"],
   "tools": ["local_docs"],
-  "model_profile": "default"
+  "model_profile": "reliable",
+  "workflow_stage": "action",
+  "town_place": "生信实验室",
+  "town_icon": "🧬",
+  "schedule": ["解析生信任务", "映射分析流程", "形成可验证证据"]
 }
 ```
 
 网页点击“添加角色”后：
 
-1. API 校验 `role_id`、提示词、工具 allowlist 和模型配置。
+1. API 校验 `role_id`、提示词、工作阶段、建筑位置和模型配置。
 2. 角色写入版本化 Registry。
-3. Router 下一次请求即可发现新角色，不需要重启。
+3. Router 下一次请求即可发现新角色，不需要重启；`context` 角色先提供证据，
+   `action` 角色接收 handoff 后执行。
 4. Run Report 记录角色版本，保证结果可复现。
+5. 网页可即时暂停/启用角色，建筑和日程同步更新。
 
 飞书端后续用交互卡片呈现同一表单；卡片回调仍调用这套 API。
 

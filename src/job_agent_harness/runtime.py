@@ -6,6 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from .activity import ActivityStore
+from .cognition import MemoryStore
 from .model_client import OpenAICompatibleClient
 from .orchestrator import MultiAgentOrchestrator
 from .registry import RoleRegistry
@@ -42,12 +43,25 @@ def build_activity_store() -> ActivityStore:
     return ActivityStore(runtime_data_dir() / "activity.jsonl")
 
 
-def build_orchestrator(registry: RoleRegistry | None = None):
+def build_memory_store() -> MemoryStore:
+    return MemoryStore(
+        runtime_data_dir() / "memories.jsonl",
+        reflection_interval=int(
+            os.getenv("JOB_AGENT_REFLECTION_INTERVAL", "3")
+        ),
+    )
+
+
+def build_orchestrator(
+    registry: RoleRegistry | None = None,
+    memory_store: MemoryStore | None = None,
+):
     baseline = MultiAgentOrchestrator(
         registry=registry or build_registry(),
         model_client=OpenAICompatibleClient(),
         max_concurrency=int(os.getenv("JOB_AGENT_MAX_CONCURRENCY", "4")),
         activity_store=build_activity_store(),
+        memory_store=memory_store or build_memory_store(),
     )
     orchestrator_kind = os.getenv(
         "JOB_AGENT_ORCHESTRATOR",

@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field
 
 from .activity import ActivityEvent
+from .cognition import AgentMemory, MemoryStore
 from .registry import RoleRegistry
 
 
@@ -39,12 +40,27 @@ class TownMemory(BaseModel):
     text: str
 
 
+class TownCognitiveMemory(BaseModel):
+    memory_id: str
+    timestamp: str
+    run_id: str
+    kind: str
+    text: str
+    importance: float
+
+
 class TownAgentSnapshot(BaseModel):
     role_id: str
     display_name: str
     place: str
+    icon: str = "🏠"
+    x: float | None = None
+    y: float | None = None
     goal: str
+    enabled: bool = True
+    workflow_stage: str = "auto"
     status: Literal[
+        "disabled",
         "idle",
         "queued",
         "running",
@@ -58,6 +74,8 @@ class TownAgentSnapshot(BaseModel):
     latency_ms: float | None = None
     schedule: list[str] = Field(default_factory=list)
     memories: list[TownMemory] = Field(default_factory=list)
+    memory_stream: list[TownCognitiveMemory] = Field(default_factory=list)
+    reflection: str = ""
 
 
 class TownHandoff(BaseModel):
@@ -90,6 +108,20 @@ def _event_text(event: ActivityEvent) -> str:
         sources = "、".join(event.source_role_ids)
         targets = "、".join(event.target_role_ids)
         return f"{sources} → {targets}：共享上游证据"
+    if event.kind == "memory_retrieved":
+        return event.output_excerpt or "检索长期记忆"
+    if event.kind == "plan_updated":
+        return event.output_excerpt or "更新本轮计划"
+    if event.kind == "reflection_created":
+        return event.output_excerpt or "形成阶段反思"
+    if event.kind == "daily_push_started":
+        return f"{event.display_name or event.role_id} 开始推送日报"
+    if event.kind == "daily_push_completed":
+        return (
+            event.output_excerpt
+            or event.error
+            or f"{event.display_name or event.role_id} 完成日报推送"
+        )
     if event.kind == "agent_started":
         return f"{event.display_name or event.role_id} 开始工作"
     if event.kind == "agent_completed":
@@ -114,10 +146,22 @@ def _memory(event: ActivityEvent) -> TownMemory:
     )
 
 
+def _cognitive_memory(memory: AgentMemory) -> TownCognitiveMemory:
+    return TownCognitiveMemory(
+        memory_id=memory.memory_id,
+        timestamp=memory.timestamp,
+        run_id=memory.run_id,
+        kind=memory.kind,
+        text=memory.text,
+        importance=memory.importance,
+    )
+
+
 def build_town_snapshot(
     registry: RoleRegistry,
     events: list[ActivityEvent],
     *,
+    memory_store: MemoryStore | None = None,
     memory_limit: int = 6,
     timeline_limit: int = 18,
 ) -> TownSnapshot:
@@ -156,9 +200,21 @@ def build_town_snapshot(
             event
             for event in current_events
             if event.role_id == role.role_id
+            and event.kind in {
+                "agent_started",
+                "agent_completed",
+                "daily_push_started",
+                "daily_push_completed",
+            }
         ]
         last = role_events[-1] if role_events else None
-        if last is None:
+        if not role.enabled:
+            status = "disabled"
+            current_action = "角色已暂停，不参与自动路由"
+            phase = "idle"
+            model = "—"
+            latency_ms = None
+        elif last is None:
             status = "queued" if role.role_id in selected_ids else "idle"
             current_action = (
                 "在 LangGraph Plaza 等待调度"
@@ -170,7 +226,9 @@ def build_town_snapshot(
             latency_ms = None
         else:
             status = (
-                "running" if last.kind == "agent_started" else last.status
+                "running"
+                if last.kind in {"agent_started", "daily_push_started"}
+                else last.status
             )
             current_action = (
                 f"正在执行 {last.phase} 阶段任务"
@@ -188,25 +246,54 @@ def build_town_snapshot(
             or role.role_id in event.source_role_ids
             or role.role_id in event.target_role_ids
         ]
+        cognitive_memories = (
+            memory_store.list(role_id=role.role_id, limit=memory_limit)
+            if memory_store is not None
+            else []
+        )
+        latest_reflection = next(
+            (
+                memory.text
+                for memory in reversed(cognitive_memories)
+                if memory.kind == "reflection"
+            ),
+            "",
+        )
         agents.append(
             TownAgentSnapshot(
                 role_id=role.role_id,
                 display_name=role.display_name,
-                place=TOWN_PLACES.get(role.role_id, role.display_name),
+                place=(
+                    role.town_place
+                    or TOWN_PLACES.get(role.role_id, role.display_name)
+                ),
+                icon=role.town_icon,
+                x=role.town_x,
+                y=role.town_y,
                 goal=role.goal,
+                enabled=role.enabled,
+                workflow_stage=role.workflow_stage,
                 status=status,
                 phase=phase,
                 current_action=current_action,
                 model=model,
                 latency_ms=latency_ms,
-                schedule=ROLE_SCHEDULES.get(
-                    role.role_id,
-                    ["接收任务", "执行角色目标", "提交可核验结果"],
+                schedule=(
+                    role.schedule
+                    or ROLE_SCHEDULES.get(
+                        role.role_id,
+                        ["接收任务", "执行角色目标", "提交可核验结果"],
+                    )
                 ),
                 memories=[
                     _memory(event)
                     for event in related_events[-max(1, memory_limit) :]
                 ],
+                memory_stream=[
+                    _cognitive_memory(memory)
+                    for memory in cognitive_memories
+                ],
+                reflection=latest_reflection,
             )
         )
 
