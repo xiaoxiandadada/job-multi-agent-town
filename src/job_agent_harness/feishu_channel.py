@@ -593,7 +593,7 @@ def run_supervisor(identity_labels: list[str]) -> None:
             float(
                 os.getenv(
                     "JOB_AGENT_FEISHU_START_STAGGER_SECONDS",
-                    "1.5",
+                    "10",
                 )
             ),
         )
