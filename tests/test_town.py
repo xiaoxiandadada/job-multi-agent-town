@@ -108,3 +108,41 @@ def test_town_snapshot_is_idle_without_activity(tmp_path):
     assert snapshot.current_phase == "idle"
     assert snapshot.agents[0].status == "idle"
     assert snapshot.timeline == []
+
+
+def test_town_snapshot_exposes_historical_replay_position(tmp_path):
+    registry = RoleRegistry(tmp_path / "roles.json")
+    registry.replace_all([make_role("job_scout", "岗位侦察员")])
+    events = [
+        ActivityEvent(
+            timestamp="2026-07-28T01:00:00+00:00",
+            run_id="run-replay",
+            kind="run_started",
+            status="running",
+            orchestrator="langgraph",
+            phase="route",
+            query_excerpt="回放岗位任务",
+        ),
+        ActivityEvent(
+            timestamp="2026-07-28T01:00:02+00:00",
+            run_id="run-replay",
+            kind="route_completed",
+            status="completed",
+            orchestrator="langgraph",
+            phase="route",
+            selected_role_ids=["job_scout"],
+        ),
+    ]
+
+    snapshot = build_town_snapshot(
+        registry,
+        events,
+        replay_step=2,
+        replay_total_steps=5,
+    )
+
+    assert snapshot.replay.enabled is True
+    assert snapshot.replay.step == 2
+    assert snapshot.replay.total_steps == 5
+    assert snapshot.town_time == "2026-07-28 09:00:02"
+    assert snapshot.agents[0].status == "queued"

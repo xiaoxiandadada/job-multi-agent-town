@@ -94,6 +94,23 @@
       color: var(--muted); font: 11px ui-monospace, monospace;
     }
     .town-toolbar strong { color: var(--text); font-weight: 700; }
+    .town-tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: flex-end; }
+    .town-replay { display: flex; align-items: center; gap: 7px; }
+    .town-replay select {
+      max-width: 154px; padding: 6px 8px; border: 1px solid var(--line);
+      border-radius: 7px; color: #c4d6cf; background: #0a1511;
+      font: 10px ui-monospace, monospace;
+    }
+    .town-replay input[type="range"] {
+      width: 112px; margin: 0; padding: 0; accent-color: var(--green-2);
+    }
+    .town-replay button {
+      min-width: auto; padding: 6px 8px; border: 1px solid #416b5c;
+      border-radius: 7px; color: var(--green); background: #0b1914;
+      font: 700 9px ui-monospace, monospace;
+    }
+    .town-replay button:disabled { opacity: .42; cursor: default; }
+    .town-replay-step { min-width: 42px; color: var(--green); text-align: right; }
     .town-legend { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
     .town-legend span { display: flex; align-items: center; gap: 6px; }
     .legend-dot { width: 7px; height: 7px; border-radius: 50%; background: #63766f; }
@@ -338,6 +355,8 @@
       .controls, .role-form { grid-template-columns: 1fr; }
       .role-form > * { grid-column: 1; }
       .town-toolbar, .town-detail { align-items: flex-start; grid-template-columns: 1fr; }
+      .town-tools, .town-replay { align-items: flex-start; justify-content: flex-start; }
+      .town-replay { flex-wrap: wrap; }
       .town-ledger { grid-template-columns: 1fr; }
       .town-ledger article + article { border-left: 0; border-top: 1px solid var(--line); }
       .town-entry { grid-template-columns: 54px 78px minmax(0, 1fr); }
@@ -385,10 +404,21 @@
   <section class="town-shell">
     <div class="town-toolbar">
       <strong>JOB SEARCH TOWN / <span id="town-clock">RUNTIME VIEW</span></strong>
-      <div class="town-legend">
-        <span><i class="legend-dot"></i>待命</span>
-        <span><i class="legend-dot running"></i>工作中</span>
-        <span><i class="legend-dot done"></i>已完成</span>
+      <div class="town-tools">
+        <div class="town-replay">
+          <select id="town-run-select" onchange="selectTownRun(this.value)">
+            <option value="">LIVE · 实时小镇</option>
+          </select>
+          <input id="town-replay-slider" type="range" min="1" max="1" value="1"
+            aria-label="回放时间步" disabled onchange="selectTownStep(this.value)">
+          <span class="town-replay-step" id="town-replay-step">LIVE</span>
+          <button id="town-live-button" type="button" disabled onclick="returnToLiveTown()">回到实时</button>
+        </div>
+        <div class="town-legend">
+          <span><i class="legend-dot"></i>待命</span>
+          <span><i class="legend-dot running"></i>工作中</span>
+          <span><i class="legend-dot done"></i>已完成</span>
+        </div>
       </div>
     </div>
     <div class="town-map" id="town-map">
@@ -507,7 +537,14 @@
   </section>
 </main>
 <script>
-const state = { roles: [], events: [], runtime: {}, town: {}, requestPending: false };
+const state = {
+  roles: [],
+  events: [],
+  runtime: {},
+  town: {},
+  requestPending: false,
+  replay: {runId: '', step: 0}
+};
 const phaseOrder = ['route', 'context', 'action', 'judge'];
 const townLayout = {
   job_scout: {x: 13, y: 20, icon: '📡', place: '机会驿站'},
@@ -541,6 +578,50 @@ function groupRuns(events) {
     values.sort((a,b) => a.timestamp.localeCompare(b.timestamp));
     return { id, events: values, first: values[0], last: values.at(-1) };
   }).sort((a,b) => b.last.timestamp.localeCompare(a.last.timestamp));
+}
+
+function runForDisplay(runs) {
+  const source = state.replay.runId
+    ? runs.find(run => run.id === state.replay.runId)
+    : runs[0];
+  if (!source || !state.replay.runId) return source;
+  const step = Math.max(
+    1,
+    Math.min(
+      state.town.replay?.step || state.replay.step || source.events.length,
+      source.events.length
+    )
+  );
+  const events = source.events.slice(0, step);
+  return {
+    ...source,
+    events,
+    first: events[0],
+    last: events.at(-1)
+  };
+}
+
+function renderReplayControls(runs) {
+  const select = $('#town-run-select');
+  const selectedExists = runs.some(run => run.id === state.replay.runId);
+  if (state.replay.runId && !selectedExists) {
+    state.replay.runId = '';
+    state.replay.step = 0;
+  }
+  select.innerHTML = '<option value="">LIVE · 实时小镇</option>' + runs.slice(0, 12).map(run =>
+    `<option value="${escapeHtml(run.id)}">REPLAY · ${escapeHtml(run.id.slice(0, 8))} · ${run.events.length}步</option>`
+  ).join('');
+  select.value = state.replay.runId;
+  const activeRun = runs.find(run => run.id === state.replay.runId);
+  const slider = $('#town-replay-slider');
+  const step = activeRun
+    ? Math.max(1, Math.min(state.town.replay?.step || state.replay.step || activeRun.events.length, activeRun.events.length))
+    : 1;
+  slider.disabled = !activeRun;
+  slider.max = String(activeRun?.events.length || 1);
+  slider.value = String(step);
+  $('#town-replay-step').textContent = activeRun ? `${step}/${activeRun.events.length}` : 'LIVE';
+  $('#town-live-button').disabled = !activeRun;
 }
 
 function roleState(role, run) {
@@ -696,7 +777,8 @@ function renderTown(run, phase) {
 
 function render() {
   const runs = groupRuns(state.events);
-  const current = runs[0];
+  renderReplayControls(runs);
+  const current = runForDisplay(runs);
   const completeEvent = current?.events.findLast(event => event.kind === 'run_completed');
   const failedEvent = current?.events.findLast(event => event.kind === 'run_failed');
   const completedAgents = current?.events.filter(event =>
@@ -714,9 +796,12 @@ function render() {
   const lastTime = current ? Date.parse((completeEvent || failedEvent || current.last).timestamp) : 0;
   const elapsed = current ? lastTime - firstTime : null;
 
-  $('#runtime-name').textContent = `${state.runtime.orchestrator || 'Runtime'} · ${state.roles.length} roles · live`;
+  const runtimeMode = state.replay.runId ? 'replay' : 'live';
+  $('#runtime-name').textContent = `${state.runtime.orchestrator || 'Runtime'} · ${state.roles.length} roles · ${runtimeMode}`;
   $('#run-id').textContent = current ? `RUN ${current.id.slice(0,8).toUpperCase()}` : 'NO RUN YET';
-  $('#run-state').textContent = failedEvent ? '运行失败' : completeEvent ? (partialFailure ? '运行完成（含失败）' : '运行完成') : current ? 'Agent 正在协作' : '等待任务';
+  $('#run-state').textContent = state.replay.runId
+    ? `轨迹回放 ${state.town.replay?.step || state.replay.step}/${state.town.replay?.total_steps || current?.events.length || 0}`
+    : failedEvent ? '运行失败' : completeEvent ? (partialFailure ? '运行完成（含失败）' : '运行完成') : current ? 'Agent 正在协作' : '等待任务';
   $('#run-query').textContent = current?.first.query_excerpt || '从飞书 @角色，或在下方启动一次团队任务。';
   $('#m-phase').textContent = phase.toUpperCase();
   $('#m-complete').textContent = `${okCount} / ${expectedRoleIds.size || state.roles.filter(role => role.enabled).length}`;
@@ -739,7 +824,9 @@ function render() {
     else if (target === phase) element.classList.add('active');
   }
 
-  $('#agent-caption').textContent = `${state.roles.length} 个逻辑角色 · 状态每 1.5 秒刷新`;
+  $('#agent-caption').textContent = state.replay.runId
+    ? `${state.roles.length} 个逻辑角色 · 历史事件回放`
+    : `${state.roles.length} 个逻辑角色 · 状态每 1.5 秒刷新`;
   $('#agents').innerHTML = state.roles.map((role, index) => {
     const value = roleState(role, current);
     const label = ({disabled:'DISABLED', idle:'IDLE', queued:'QUEUED', running:'RUNNING', ok:'DONE', completed:'DONE', error:'ERROR', timeout:'TIMEOUT'})[value.status] || value.status;
@@ -762,7 +849,7 @@ function render() {
     const partial = agents.some(event => !['ok','completed'].includes(event.status));
     const duration = done?.metrics?.wall_latency_ms ?? (Date.parse(run.last.timestamp)-Date.parse(run.first.timestamp));
     return `<tr>
-      <td class="mono">${escapeHtml(run.id.slice(0,8))}</td>
+      <td class="mono"><button class="secondary" onclick="selectTownRun('${escapeHtml(run.id)}')">${escapeHtml(run.id.slice(0,8))}</button></td>
       <td>${escapeHtml(run.first.orchestrator)}</td>
       <td>${escapeHtml(run.first.mode || '—')}</td>
       <td>${fail ? 'error' : done ? (partial ? 'partial' : 'completed') : 'running'}</td>
@@ -775,11 +862,20 @@ function render() {
 
 async function refresh() {
   try {
+    const townParams = new URLSearchParams();
+    if (state.replay.runId) {
+      townParams.set('run_id', state.replay.runId);
+      if (state.replay.step) townParams.set('step', String(state.replay.step));
+    }
+    const townUrl = `/api/town${townParams.size ? `?${townParams}` : ''}`;
     const [roles, events, runtime, town] = await Promise.all([
       fetch('/api/roles').then(response => response.json()),
       fetch('/api/activity?limit=1000').then(response => response.json()),
       fetch('/api/runtime').then(response => response.json()),
-      fetch('/api/town').then(response => response.json())
+      fetch(townUrl).then(response => {
+        if (!response.ok) throw new Error(`Town ${response.status}`);
+        return response.json();
+      })
     ]);
     state.roles = roles;
     state.events = events;
@@ -789,6 +885,24 @@ async function refresh() {
   } catch (error) {
     $('#runtime-name').textContent = `Runtime disconnected · ${error.message}`;
   }
+}
+
+async function selectTownRun(runId) {
+  state.replay.runId = runId;
+  const run = groupRuns(state.events).find(value => value.id === runId);
+  state.replay.step = run?.events.length || 0;
+  await refresh();
+}
+
+async function selectTownStep(value) {
+  state.replay.step = Number(value);
+  await refresh();
+}
+
+async function returnToLiveTown() {
+  state.replay.runId = '';
+  state.replay.step = 0;
+  await refresh();
 }
 
 async function runAgents() {

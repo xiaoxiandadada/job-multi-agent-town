@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from job_agent_harness.activity import ActivityEvent, ActivityStore
 from job_agent_harness.model_client import MockModelClient
 from job_agent_harness.orchestrator import MultiAgentOrchestrator
 from job_agent_harness.api import create_app
@@ -99,3 +100,72 @@ def test_agent_memory_search_endpoint_uses_persisted_run_memory(
     ).json()
     assert results
     assert "score" in results[0]
+
+
+def test_town_replay_endpoint_slices_one_real_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOB_AGENT_DATA_DIR", str(tmp_path))
+    store = ActivityStore(tmp_path / "activity.jsonl")
+    for event in [
+        ActivityEvent(
+            timestamp="2026-07-28T01:00:00+00:00",
+            run_id="run-one",
+            kind="run_started",
+            status="running",
+            orchestrator="langgraph",
+            phase="route",
+            query_excerpt="回放任务",
+        ),
+        ActivityEvent(
+            timestamp="2026-07-28T01:00:01+00:00",
+            run_id="run-one",
+            kind="route_completed",
+            status="completed",
+            orchestrator="langgraph",
+            phase="route",
+            selected_role_ids=["job_scout"],
+        ),
+        ActivityEvent(
+            timestamp="2026-07-28T01:00:02+00:00",
+            run_id="run-one",
+            kind="agent_started",
+            status="running",
+            orchestrator="langgraph",
+            phase="context",
+            role_id="job_scout",
+            display_name="岗位侦察员",
+        ),
+        ActivityEvent(
+            timestamp="2026-07-28T01:00:03+00:00",
+            run_id="run-two",
+            kind="run_started",
+            status="running",
+            orchestrator="langgraph",
+            phase="route",
+        ),
+    ]:
+        store.emit(event)
+    client = TestClient(create_app())
+
+    response = client.get(
+        "/api/town",
+        params={"run_id": "run-one", "step": 2},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["current_run_id"] == "run-one"
+    assert payload["replay"] == {
+        "enabled": True,
+        "step": 2,
+        "total_steps": 3,
+    }
+    scout = next(
+        agent
+        for agent in payload["agents"]
+        if agent["role_id"] == "job_scout"
+    )
+    assert scout["status"] == "queued"
+    assert client.get(
+        "/api/town",
+        params={"run_id": "missing"},
+    ).status_code == 404

@@ -26,6 +26,8 @@
 - RPG 求职小镇：7 个角色拥有独立建筑和精灵，沿 LangGraph 阶段道路移动；不是
   预录动画，位置、气泡、状态、日程、记忆流、证据交接和延迟均来自
   `ActivityEvent`。
+- 真实轨迹回放：选择历史 run 并按事件时间步回放 Plaza 调度、Agent 工作、
+  context → action 交接与 Judge 审核，不显示未来事件或伪造活动。
 - 生成式认知层：每个角色持久化 observation、handoff、plan 和 reflection；
   下一次执行按相关性、重要性与新近度检索长期记忆并注入角色上下文。
 - 一键角色模板：网页可立即添加生信、数据科学或 Agent 评测角色，也可自定义

@@ -60,10 +60,32 @@ def create_app() -> FastAPI:
         return activity_store.read(limit=limit, run_id=run_id)
 
     @app.get("/api/town", response_model=TownSnapshot)
-    async def town():
+    async def town(
+        run_id: str | None = None,
+        step: int | None = Query(default=None, ge=1, le=2000),
+    ):
+        events = activity_store.read(limit=2000)
+        if run_id is not None:
+            run_events = [
+                event for event in events if event.run_id == run_id
+            ]
+            if not run_events:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"unknown run: {run_id}",
+                )
+            total_steps = len(run_events)
+            replay_step = min(step or total_steps, total_steps)
+            return build_town_snapshot(
+                registry,
+                run_events[:replay_step],
+                memory_store=None,
+                replay_step=replay_step,
+                replay_total_steps=total_steps,
+            )
         return build_town_snapshot(
             registry,
-            activity_store.read(limit=1200),
+            events,
             memory_store=memory_store,
         )
 

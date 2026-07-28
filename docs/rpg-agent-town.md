@@ -85,6 +85,11 @@ flowchart LR
 context → action 的证据交接；`/api/town` 把 ActivityEvent 与 Memory Stream
 投影成每个角色的当前行动、计划和记忆流。API Key 与 App Secret 从不写入事件。
 
+工具栏可选择任一历史 run，并用时间步滑杆逐事件回放。回放调用
+`/api/town?run_id=<run>&step=<n>`，只使用该 run 截至第 n 条的真实
+ActivityEvent；角色会按当时状态在 Plaza、自己的建筑与 Judge 路径间移动。历史
+回放不注入“未来”长期记忆，也不会编造对话或状态。
+
 ## 动态角色与建筑
 
 网页“角色工作台”支持：
@@ -113,6 +118,7 @@ open http://127.0.0.1:8000
 4. Judge 完成证据审查；
 5. 历史运行表保留模型、耗时和结果；
 6. 点击建筑查看该角色从过往运行形成的记忆流。
+7. 从小镇工具栏选择历史 run，拖动滑杆逐步回放路由、工作、交接和审核。
 
 GitHub Pages 只能展示静态说明；要让小镇实时运行，需要 FastAPI Runtime 和模型 API。
 部署时可直接使用仓库的 Dockerfile。

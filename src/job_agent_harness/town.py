@@ -86,6 +86,12 @@ class TownHandoff(BaseModel):
     summary: str
 
 
+class TownReplayState(BaseModel):
+    enabled: bool = False
+    step: int = 0
+    total_steps: int = 0
+
+
 class TownSnapshot(BaseModel):
     generated_at: str
     town_time: str
@@ -94,6 +100,7 @@ class TownSnapshot(BaseModel):
     agents: list[TownAgentSnapshot]
     handoffs: list[TownHandoff] = Field(default_factory=list)
     timeline: list[TownMemory] = Field(default_factory=list)
+    replay: TownReplayState = Field(default_factory=TownReplayState)
 
 
 def _event_text(event: ActivityEvent) -> str:
@@ -164,8 +171,16 @@ def build_town_snapshot(
     memory_store: MemoryStore | None = None,
     memory_limit: int = 6,
     timeline_limit: int = 18,
+    replay_step: int | None = None,
+    replay_total_steps: int | None = None,
 ) -> TownSnapshot:
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    replay_enabled = replay_total_steps is not None
+    display_time = now
+    if replay_enabled and events:
+        display_time = datetime.fromisoformat(
+            events[-1].timestamp
+        ).astimezone(ZoneInfo("Asia/Shanghai"))
     current_run_id = events[-1].run_id if events else None
     current_events = (
         [event for event in events if event.run_id == current_run_id]
@@ -314,10 +329,15 @@ def build_town_snapshot(
     ]
     return TownSnapshot(
         generated_at=now.isoformat(),
-        town_time=now.strftime("%Y-%m-%d %H:%M:%S"),
+        town_time=display_time.strftime("%Y-%m-%d %H:%M:%S"),
         current_run_id=current_run_id,
         current_phase=latest_phase,
         agents=agents,
         handoffs=handoffs,
         timeline=timeline,
+        replay=TownReplayState(
+            enabled=replay_enabled,
+            step=replay_step or 0,
+            total_steps=replay_total_steps or 0,
+        ),
     )
