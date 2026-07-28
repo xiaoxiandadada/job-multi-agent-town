@@ -63,6 +63,7 @@ HELP_TEXT = """# AI 求职 Multi-Agent 命令
 - `/daily`：推送今天的结构化日报
 - `/daily YYYY-MM-DD`：推送指定日期日报
 - `/daily full`：推送今天的完整日报
+- `/group-create`：由总控创建并绑定 8-Bot 私有 Agent 小镇群
 - `/knowledge <任务>`：岗位知识补充员 + Judge
 - `/job <任务>`：岗位侦察 + JD 分析 + 岗位知识 + Judge
 - `/apply <任务>`：JD/知识先行，再生成简历与作品建议

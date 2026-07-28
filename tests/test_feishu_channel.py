@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import job_agent_harness.feishu_channel as feishu_channel
 from job_agent_harness.feishu_channel import (
     FeishuBotBinding,
     binding_help,
@@ -10,10 +11,12 @@ from job_agent_harness.feishu_channel import (
     configured_role_bot_ids,
     format_report_message,
     load_bot_bindings,
+    register_message_handler,
     role_bot_env_names,
     send_checked,
     strip_bound_bot_mention,
 )
+from job_agent_harness.feishu_group import AgentTownGroup
 from job_agent_harness.models import RoleSpec, RunMetrics, RunReport
 from job_agent_harness.push_daily import build_delivery_plan
 
@@ -229,6 +232,116 @@ def test_judge_binding_help_explains_single_audit():
     )
 
     assert "不再重复调用 Judge" in binding_help(binding)
+
+
+@pytest.mark.asyncio
+async def test_controller_group_create_routes_sender_and_all_role_apps(
+    monkeypatch,
+    tmp_path,
+):
+    class FakeChannel:
+        def __init__(self):
+            self.callback = None
+            self.sent = []
+
+        def on(self, event, callback):
+            assert event == "message"
+            self.callback = callback
+
+        async def send(self, to, message):
+            self.sent.append((to, message))
+            return SimpleNamespace(success=True, error=None)
+
+    captured = {}
+
+    async def fake_ensure(**kwargs):
+        captured.update(kwargs)
+        return AgentTownGroup(chat_id="oc_town", created=True)
+
+    monkeypatch.setattr(feishu_channel, "runtime_data_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        feishu_channel,
+        "configured_role_bot_ids",
+        lambda: [f"role_{index}" for index in range(7)],
+    )
+    monkeypatch.setattr(
+        feishu_channel,
+        "configured_role_app_ids",
+        lambda *_args: [f"cli_role_{index}" for index in range(7)],
+    )
+    monkeypatch.setattr(
+        feishu_channel,
+        "ensure_agent_town_group",
+        fake_ensure,
+    )
+    channel = FakeChannel()
+    binding = FeishuBotBinding(
+        app_id="cli_controller",
+        app_secret="controller-secret",
+    )
+    register_message_handler(
+        channel,
+        binding,
+        SimpleNamespace(),
+        SimpleNamespace(),
+        set(),
+    )
+
+    await channel.callback(
+        SimpleNamespace(
+            content_text="/group-create",
+            mentions=(),
+            chat_id="oc_private",
+            sender_id="ou_owner",
+        )
+    )
+
+    assert captured["owner_open_id"] == "ou_owner"
+    assert captured["role_app_ids"] == [
+        f"cli_role_{index}" for index in range(7)
+    ]
+    assert [target for target, _ in channel.sent] == [
+        "oc_private",
+        "oc_town",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_role_bot_rejects_group_create_command(tmp_path, monkeypatch):
+    class FakeChannel:
+        def on(self, _event, callback):
+            self.callback = callback
+
+        async def send(self, to, message):
+            self.sent = (to, message)
+            return SimpleNamespace(success=True, error=None)
+
+    monkeypatch.setattr(feishu_channel, "runtime_data_dir", lambda: tmp_path)
+    channel = FakeChannel()
+    binding = FeishuBotBinding(
+        app_id="cli_scout",
+        app_secret="secret",
+        display_name="岗位侦察员",
+        role_id="job_scout",
+    )
+    register_message_handler(
+        channel,
+        binding,
+        SimpleNamespace(),
+        SimpleNamespace(),
+        {"job_scout"},
+    )
+
+    await channel.callback(
+        SimpleNamespace(
+            content_text="/group-create",
+            mentions=(),
+            chat_id="oc_chat",
+            sender_id="ou_owner",
+        )
+    )
+
+    assert "总控机器人" in channel.sent[1]["text"]
 
 
 def test_daily_delivery_prefers_independent_role_bots():

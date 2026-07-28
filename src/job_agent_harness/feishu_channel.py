@@ -19,7 +19,12 @@ from .daily_brief import (
     load_daily_messages,
     load_role_daily_messages,
     parse_daily_command,
-    remember_chat_id,
+)
+from .feishu_group import (
+    AGENT_TOWN_NAME,
+    configured_role_app_ids,
+    ensure_agent_town_group,
+    remember_preferred_chat_id,
 )
 from .models import RoleSpec, RunReport, RunRequest
 from .runtime import (
@@ -250,7 +255,77 @@ def register_message_handler(
             getattr(message, "mentions", ()),
         )
         if binding.role_id is None:
-            remember_chat_id(runtime_data_dir(), message.chat_id)
+            remember_preferred_chat_id(
+                runtime_data_dir(),
+                message.chat_id,
+            )
+        if text == "/group-create":
+            if binding.role_id is not None:
+                await send_checked(
+                    channel,
+                    message.chat_id,
+                    {
+                        "text": (
+                            "请在与总控机器人 AI 求职 Multi-Agent "
+                            "的私聊中发送 /group-create。"
+                        )
+                    },
+                )
+                return
+            try:
+                role_ids = configured_role_bot_ids()
+                role_app_ids = configured_role_app_ids(
+                    role_ids,
+                    os.environ,
+                    role_bot_env_names,
+                )
+                group = await ensure_agent_town_group(
+                    controller_app_id=binding.app_id,
+                    controller_app_secret=binding.app_secret,
+                    owner_open_id=message.sender_id,
+                    role_app_ids=role_app_ids,
+                    data_dir=runtime_data_dir(),
+                )
+                action = "已创建" if group.created else "已绑定"
+                confirmation = (
+                    f"{action}「{AGENT_TOWN_NAME}」：总控 + "
+                    f"{len(role_app_ids)} 个独立角色机器人已就位。"
+                    "后续日报将优先推送到本群。"
+                )
+                await send_checked(
+                    channel,
+                    message.chat_id,
+                    {"text": confirmation},
+                )
+                if group.chat_id != message.chat_id:
+                    await send_checked(
+                        channel,
+                        group.chat_id,
+                        {
+                            "markdown": (
+                                f"# {AGENT_TOWN_NAME}已启动\n\n"
+                                f"- 总控：1 个\n"
+                                f"- 独立角色机器人：{len(role_app_ids)} 个\n"
+                                "- 编排：LangGraph\n"
+                                "- 日报：各角色可按职责分别推送\n\n"
+                                "发送 `/roles` 查看团队，或直接 "
+                                "@对应角色机器人提问。"
+                            )
+                        },
+                    )
+            except Exception as exc:
+                await send_checked(
+                    channel,
+                    message.chat_id,
+                    {
+                        "text": (
+                            f"Agent 小镇群创建失败：{exc}\n"
+                            "请确认总控已开通 im:chat:create 与 "
+                            "im:chat.members:write_only。"
+                        )
+                    },
+                )
+            return
         if text == "/help":
             await send_checked(
                 channel,
