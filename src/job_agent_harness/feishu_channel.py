@@ -298,7 +298,8 @@ def register_message_handler(
                 group = await ensure_agent_town_group(
                     controller_app_id=binding.app_id,
                     controller_app_secret=binding.app_secret,
-                    owner_open_id=message.sender_id,
+                    owner_id=message.sender_id,
+                    owner_id_type="open_id",
                     role_app_ids=role_app_ids,
                     data_dir=runtime_data_dir(),
                 )

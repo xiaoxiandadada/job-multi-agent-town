@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -18,6 +18,7 @@ FEISHU_API_BASE = "https://open.feishu.cn/open-apis"
 AGENT_TOWN_NAME = "AI 求职 Agent 小镇"
 GROUP_STATE_FILENAME = "feishu_group.json"
 CREATE_BOT_LIMIT = 5
+UserIdType = Literal["open_id", "union_id", "user_id"]
 
 
 @dataclass(frozen=True)
@@ -113,7 +114,8 @@ async def _provision_agent_town_group(
     client,
     controller_app_id: str,
     controller_app_secret: str,
-    owner_open_id: str,
+    owner_id: str,
+    owner_id_type: UserIdType,
     role_app_ids: Sequence[str],
 ) -> AgentTownGroup:
     token_response = await client.post(
@@ -134,13 +136,16 @@ async def _provision_agent_town_group(
     request_uuid = str(
         uuid.uuid5(
             uuid.NAMESPACE_URL,
-            f"feishu-agent-town:{controller_app_id}:{owner_open_id}",
+            (
+                f"feishu-agent-town:{controller_app_id}:"
+                f"{owner_id_type}:{owner_id}"
+            ),
         )
     )
     create_response = await client.post(
         f"{FEISHU_API_BASE}/im/v1/chats",
         params={
-            "user_id_type": "open_id",
+            "user_id_type": owner_id_type,
             "set_bot_manager": "true",
             "uuid": request_uuid,
         },
@@ -153,8 +158,8 @@ async def _provision_agent_town_group(
             "chat_mode": "group",
             "chat_type": "private",
             "group_message_type": "chat",
-            "owner_id": owner_open_id,
-            "user_id_list": [owner_open_id],
+            "owner_id": owner_id,
+            "user_id_list": [owner_id],
             "bot_id_list": first_role_apps,
         },
     )
@@ -181,17 +186,20 @@ async def ensure_agent_town_group(
     *,
     controller_app_id: str,
     controller_app_secret: str,
-    owner_open_id: str,
+    owner_id: str,
     role_app_ids: Sequence[str],
     data_dir: Path,
+    owner_id_type: UserIdType = "open_id",
     client=None,
 ) -> AgentTownGroup:
     existing = load_agent_town_group(data_dir)
     if existing:
         remember_chat_id(data_dir, existing.chat_id)
         return existing
-    if not owner_open_id.strip():
+    if not owner_id.strip():
         raise ValueError("无法识别建群用户")
+    if owner_id_type not in {"open_id", "union_id", "user_id"}:
+        raise ValueError("不支持的飞书用户 ID 类型")
     if not role_app_ids:
         raise ValueError("至少需要配置一个角色机器人")
 
@@ -201,7 +209,8 @@ async def ensure_agent_town_group(
                 client=owned_client,
                 controller_app_id=controller_app_id,
                 controller_app_secret=controller_app_secret,
-                owner_open_id=owner_open_id,
+                owner_id=owner_id,
+                owner_id_type=owner_id_type,
                 role_app_ids=role_app_ids,
             )
     else:
@@ -209,7 +218,8 @@ async def ensure_agent_town_group(
             client=client,
             controller_app_id=controller_app_id,
             controller_app_secret=controller_app_secret,
-            owner_open_id=owner_open_id,
+            owner_id=owner_id,
+            owner_id_type=owner_id_type,
             role_app_ids=role_app_ids,
         )
 

@@ -43,7 +43,7 @@ async def test_create_group_adds_first_five_then_remaining_two(tmp_path):
     group = await ensure_agent_town_group(
         controller_app_id="cli_controller",
         controller_app_secret="secret",
-        owner_open_id="ou_owner",
+        owner_id="ou_owner",
         role_app_ids=role_app_ids,
         data_dir=tmp_path,
         client=client,
@@ -74,7 +74,7 @@ async def test_existing_group_is_idempotent_and_restores_target(tmp_path):
     group = await ensure_agent_town_group(
         controller_app_id="cli_controller",
         controller_app_secret="secret",
-        owner_open_id="ou_owner",
+        owner_id="ou_owner",
         role_app_ids=["cli_role"],
         data_dir=tmp_path,
         client=client,
@@ -101,7 +101,7 @@ async def test_member_add_failure_does_not_replace_previous_target(tmp_path):
         await ensure_agent_town_group(
             controller_app_id="cli_controller",
             controller_app_secret="secret",
-            owner_open_id="ou_owner",
+            owner_id="ou_owner",
             role_app_ids=[f"cli_role_{index}" for index in range(7)],
             data_dir=tmp_path,
             client=client,
@@ -139,3 +139,26 @@ def test_configured_role_app_ids_reads_all_roles_in_order():
     )
 
     assert app_ids == ["cli_scout", "cli_judge"]
+
+
+@pytest.mark.asyncio
+async def test_group_creation_supports_union_id_owner(tmp_path):
+    client = FakeAsyncClient(
+        [
+            response({"code": 0, "tenant_access_token": "token"}),
+            response({"code": 0, "data": {"chat_id": "oc_union"}}),
+        ]
+    )
+
+    await ensure_agent_town_group(
+        controller_app_id="cli_controller",
+        controller_app_secret="secret",
+        owner_id="on_owner",
+        owner_id_type="union_id",
+        role_app_ids=["cli_role"],
+        data_dir=tmp_path,
+        client=client,
+    )
+
+    assert client.calls[1][1]["params"]["user_id_type"] == "union_id"
+    assert client.calls[1][1]["json"]["owner_id"] == "on_owner"

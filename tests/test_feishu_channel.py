@@ -319,7 +319,8 @@ async def test_controller_group_create_routes_sender_and_all_role_apps(
         )
     )
 
-    assert captured["owner_open_id"] == "ou_owner"
+    assert captured["owner_id"] == "ou_owner"
+    assert captured["owner_id_type"] == "open_id"
     assert captured["role_app_ids"] == [
         f"cli_role_{index}" for index in range(7)
     ]
