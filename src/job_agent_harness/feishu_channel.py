@@ -588,7 +588,16 @@ def run_supervisor(identity_labels: list[str]) -> None:
         signal.signal(stop_signal, stop_workers)
 
     try:
-        for identity_label in identity_labels:
+        start_stagger_seconds = max(
+            0.0,
+            float(
+                os.getenv(
+                    "JOB_AGENT_FEISHU_START_STAGGER_SECONDS",
+                    "1.5",
+                )
+            ),
+        )
+        for index, identity_label in enumerate(identity_labels):
             child_env = os.environ.copy()
             child_env["JOB_AGENT_FEISHU_BINDING"] = identity_label
             worker = subprocess.Popen(
@@ -608,6 +617,8 @@ def run_supervisor(identity_labels: list[str]) -> None:
                 identity_label,
                 worker.pid,
             )
+            if index < len(identity_labels) - 1 and start_stagger_seconds:
+                time.sleep(start_stagger_seconds)
 
         while not stopping:
             for identity_label, worker in workers:
