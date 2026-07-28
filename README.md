@@ -127,8 +127,10 @@ LARK_ROLE_RESUME_STRATEGIST_APP_ID=cli_xxx
 LARK_ROLE_RESUME_STRATEGIST_APP_SECRET=...
 ```
 
-配置后启动命令仍是 `uv run job-agent-feishu`。普通消息会直接进入该机器人绑定的
-role，再由 Judge 复核；总控机器人继续负责自动路由和 `/team` 等团队命令。
+配置后启动命令仍是 `uv run job-agent-feishu`。入口进程会为总控和每个角色启动
+独立 WebSocket worker，隔离飞书 SDK 的事件循环、连接故障与重连状态；普通消息会
+直接进入该机器人绑定的 role，再由 Judge 复核。总控机器人继续负责自动路由和
+`/team` 等团队命令。
 
 生产默认由 LangGraph 编排：`route → context → action → judge`；每个阶段内部使用
 有并发上限的 `asyncio` fan-out。Pydantic 定义输入输出，FastAPI 提供 API/UI，

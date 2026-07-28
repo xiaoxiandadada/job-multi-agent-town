@@ -5,6 +5,10 @@ import json
 import logging
 import os
 import re
+import signal
+import subprocess
+import sys
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -51,6 +55,22 @@ def role_bot_env_names(role_id: str) -> tuple[str, str]:
     )
 
 
+def configured_role_bot_ids(
+    environ: Mapping[str, str] | None = None,
+) -> list[str]:
+    env = environ if environ is not None else os.environ
+    return list(
+        dict.fromkeys(
+            role_id.strip()
+            for role_id in env.get(
+                "JOB_AGENT_FEISHU_ROLE_BOTS",
+                "",
+            ).split(",")
+            if role_id.strip()
+        )
+    )
+
+
 def load_bot_bindings(
     registry,
     environ: Mapping[str, str] | None = None,
@@ -71,16 +91,7 @@ def load_bot_bindings(
             )
         )
 
-    configured_role_ids = list(
-        dict.fromkeys(
-            role_id.strip()
-            for role_id in env.get(
-                "JOB_AGENT_FEISHU_ROLE_BOTS",
-                "",
-            ).split(",")
-            if role_id.strip()
-        )
-    )
+    configured_role_ids = configured_role_bot_ids(env)
     for role_id in configured_role_ids:
         try:
             role = registry.get(role_id)
@@ -113,6 +124,22 @@ def load_bot_bindings(
     app_ids = [binding.app_id for binding in bindings]
     if len(app_ids) != len(set(app_ids)):
         raise ValueError("同一个飞书 App ID 不能绑定多个角色")
+
+    selected_identity = env.get(
+        "JOB_AGENT_FEISHU_BINDING",
+        "",
+    ).strip()
+    if selected_identity:
+        bindings = [
+            binding
+            for binding in bindings
+            if binding.identity_label == selected_identity
+        ]
+        if not bindings:
+            raise ValueError(
+                "未找到飞书身份："
+                f"{selected_identity}"
+            )
     return bindings
 
 
@@ -394,11 +421,12 @@ async def run_channel() -> None:
     registry = build_registry()
     orchestrator = build_orchestrator()
     bindings = load_bot_bindings(registry)
-    connected_role_ids = {
-        binding.role_id
-        for binding in bindings
-        if binding.role_id is not None
-    }
+    if len(bindings) != 1:
+        raise RuntimeError(
+            "一个 worker 只能运行一个飞书身份；"
+            "请通过 main() 启动多身份 supervisor"
+        )
+    connected_role_ids = set(configured_role_bot_ids())
     channels = []
     try:
         for binding in bindings:
@@ -415,24 +443,102 @@ async def run_channel() -> None:
             )
             channels.append((binding, channel))
 
-        await asyncio.gather(
-            *(
-                channel.connect_until_ready(timeout=30)
-                for _, channel in channels
-            )
-        )
+        binding, channel = channels[0]
+        await channel.connect_until_ready(timeout=30)
         for binding, _ in channels:
             logger.info(
                 "Feishu identity connected name=%s role=%s",
                 binding.display_name,
                 binding.identity_label,
             )
-        await asyncio.Event().wait()
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for stop_signal in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(
+                    stop_signal,
+                    stop_event.set,
+                )
+            except NotImplementedError:
+                pass
+        await stop_event.wait()
     finally:
         await asyncio.gather(
             *(channel.disconnect() for _, channel in channels),
             return_exceptions=True,
         )
+
+
+def run_supervisor(identity_labels: list[str]) -> None:
+    """Run each Feishu WebSocket identity in an isolated process.
+
+    The upstream SDK owns one module-level asyncio loop for its WebSocket
+    client. Process isolation prevents multiple app identities from attempting
+    to drive the same loop while keeping one operational entry point.
+    """
+
+    workers: list[tuple[str, subprocess.Popen]] = []
+    stopping = False
+
+    def stop_workers(*_args) -> None:
+        nonlocal stopping
+        if stopping:
+            return
+        stopping = True
+        for _, worker in workers:
+            if worker.poll() is None:
+                worker.terminate()
+
+    previous_handlers = {}
+    for stop_signal in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[stop_signal] = signal.getsignal(stop_signal)
+        signal.signal(stop_signal, stop_workers)
+
+    try:
+        for identity_label in identity_labels:
+            child_env = os.environ.copy()
+            child_env["JOB_AGENT_FEISHU_BINDING"] = identity_label
+            worker = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "from job_agent_harness.feishu_channel "
+                        "import main; main()"
+                    ),
+                ],
+                env=child_env,
+            )
+            workers.append((identity_label, worker))
+            logger.info(
+                "Feishu worker started role=%s pid=%s",
+                identity_label,
+                worker.pid,
+            )
+
+        while not stopping:
+            for identity_label, worker in workers:
+                return_code = worker.poll()
+                if return_code is None:
+                    continue
+                stop_workers()
+                raise RuntimeError(
+                    "飞书身份 worker 异常退出："
+                    f"{identity_label} code={return_code}"
+                )
+            time.sleep(0.5)
+    finally:
+        stop_workers()
+        for _, worker in workers:
+            if worker.poll() is None:
+                try:
+                    worker.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    worker.kill()
+            else:
+                worker.wait()
+        for stop_signal, previous_handler in previous_handlers.items():
+            signal.signal(stop_signal, previous_handler)
 
 
 def main() -> None:
@@ -441,4 +547,15 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    registry = build_registry()
+    bindings = load_bot_bindings(registry)
+    selected_identity = os.getenv(
+        "JOB_AGENT_FEISHU_BINDING",
+        "",
+    ).strip()
+    if not selected_identity and len(bindings) > 1:
+        run_supervisor(
+            [binding.identity_label for binding in bindings]
+        )
+        return
     asyncio.run(run_channel())

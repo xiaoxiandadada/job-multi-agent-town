@@ -5,7 +5,8 @@ USER root
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=120 \
     PYTHONNOUSERSITE=1 \
     JOB_AGENT_PROJECT_ROOT=/app \
     JOB_AGENT_DATA_DIR=/data
@@ -17,8 +18,8 @@ COPY src ./src
 COPY configs ./configs
 COPY web ./web
 
-RUN python -m pip install --upgrade pip \
-    && python -m pip install .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --retries 10 .
 
 RUN (id -u appuser >/dev/null 2>&1 \
     || useradd --create-home --uid 10001 appuser) \

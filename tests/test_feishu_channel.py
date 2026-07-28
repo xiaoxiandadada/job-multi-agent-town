@@ -7,6 +7,7 @@ from job_agent_harness.feishu_channel import (
     FeishuBotBinding,
     binding_help,
     command_for_binding,
+    configured_role_bot_ids,
     format_report_message,
     load_bot_bindings,
     role_bot_env_names,
@@ -106,6 +107,44 @@ def test_load_bot_bindings_supports_controller_and_named_role_bots():
     assert bindings[1].display_name == "岗位侦察员"
 
 
+def test_load_bot_bindings_can_select_one_process_isolated_identity():
+    roles = {
+        "job_scout": make_role("job_scout", "岗位侦察员"),
+        "jd_analyst": make_role("jd_analyst", "JD 分析师"),
+    }
+    registry = SimpleNamespace(get=roles.__getitem__)
+    env = {
+        "LARK_APP_ID": "cli_controller",
+        "LARK_APP_SECRET": "controller-secret",
+        "JOB_AGENT_FEISHU_ROLE_BOTS": "job_scout,jd_analyst",
+        "JOB_AGENT_FEISHU_BINDING": "jd_analyst",
+        "LARK_ROLE_JOB_SCOUT_APP_ID": "cli_scout",
+        "LARK_ROLE_JOB_SCOUT_APP_SECRET": "scout-secret",
+        "LARK_ROLE_JD_ANALYST_APP_ID": "cli_jd",
+        "LARK_ROLE_JD_ANALYST_APP_SECRET": "jd-secret",
+    }
+
+    bindings = load_bot_bindings(registry, env)
+
+    assert [binding.identity_label for binding in bindings] == [
+        "jd_analyst"
+    ]
+
+
+def test_load_bot_bindings_rejects_unknown_selected_identity():
+    registry = SimpleNamespace(
+        get=lambda role_id: make_role(role_id, "岗位侦察员")
+    )
+    env = {
+        "LARK_APP_ID": "cli_controller",
+        "LARK_APP_SECRET": "controller-secret",
+        "JOB_AGENT_FEISHU_BINDING": "missing_role",
+    }
+
+    with pytest.raises(ValueError, match="missing_role"):
+        load_bot_bindings(registry, env)
+
+
 def test_load_bot_bindings_rejects_missing_role_credentials():
     registry = SimpleNamespace(
         get=lambda role_id: make_role(role_id, "岗位侦察员")
@@ -124,6 +163,16 @@ def test_role_bot_env_names_are_stable():
         "LARK_ROLE_JOB_KNOWLEDGE_CURATOR_APP_ID",
         "LARK_ROLE_JOB_KNOWLEDGE_CURATOR_APP_SECRET",
     )
+
+
+def test_configured_role_bot_ids_are_deduplicated_in_order():
+    assert configured_role_bot_ids(
+        {
+            "JOB_AGENT_FEISHU_ROLE_BOTS": (
+                "job_scout,jd_analyst,job_scout"
+            )
+        }
+    ) == ["job_scout", "jd_analyst"]
 
 
 def test_bound_bot_routes_plain_question_to_its_role():
