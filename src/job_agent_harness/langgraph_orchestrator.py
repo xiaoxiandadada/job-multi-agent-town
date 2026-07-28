@@ -8,7 +8,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from .models import AgentResult, RunMetrics, RunReport, RunRequest
-from .orchestrator import MultiAgentOrchestrator, workflow_stage
+from .orchestrator import (
+    MultiAgentOrchestrator,
+    build_judge_input,
+    workflow_stage,
+)
 
 
 class JobAgentGraphState(TypedDict, total=False):
@@ -223,9 +227,9 @@ class LangGraphOrchestrator:
                     mode=request.mode,
                     selected_role_ids=["judge"],
                 )
-                judge_input = (
-                    f"用户任务：{request.query}\n\n"
-                    f"请审核以下角色结果：\n{final_output}"
+                judge_input = build_judge_input(
+                    request.query,
+                    final_output,
                 )
                 judge_result = await self.base._run_role(
                     judge,

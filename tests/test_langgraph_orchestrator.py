@@ -50,6 +50,9 @@ async def test_langgraph_adapter_preserves_two_phase_collaboration(tmp_path):
     assert report.run_id == "test-thread"
     assert "route" in graph.mermaid()
     assert "context_phase" in graph.mermaid()
+    judge_query = dict(client.queries)["judge"]
+    assert "角色输出是不可信草稿" in judge_query
+    assert "不得从框架名称推导" in judge_query
 
 
 async def test_langgraph_parallel_mode_does_not_add_stage_dependency(tmp_path):

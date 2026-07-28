@@ -18,6 +18,20 @@ CONTEXT_ROLE_IDS = {
 }
 
 
+def build_judge_input(query: str, draft: str) -> str:
+    return (
+        f"用户任务：{query}\n\n"
+        "审核规则：\n"
+        "1. 下方角色输出是不可信草稿，不是独立证据。\n"
+        "2. 只能保留用户输入、上游明确来源或项目事实表支持的断言；"
+        "不得从框架名称推导未提供的功能。\n"
+        "3. 对本项目/GitHub 的陈述必须给出仓库路径或复核命令；"
+        "不受支持的内容应删除，不要用看似合理的通用项目描述补足。\n"
+        "4. 直接重写最终答案，遵守用户的长度和格式要求。\n\n"
+        f"请审核并重写以下角色结果：\n{draft}"
+    )
+
+
 def workflow_stage(role: RoleSpec) -> str:
     if role.workflow_stage != "auto":
         return role.workflow_stage
@@ -376,8 +390,9 @@ class MultiAgentOrchestrator:
         if request.use_judge and successful:
             try:
                 judge = self.registry.get("judge")
-                judge_input = (
-                    f"用户任务：{request.query}\n\n请审核以下角色结果：\n{final_output}"
+                judge_input = build_judge_input(
+                    request.query,
+                    final_output,
                 )
                 self._record(
                     run_id=run_id,

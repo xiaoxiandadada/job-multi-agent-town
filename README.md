@@ -64,6 +64,8 @@ RPG 小镇的状态映射和演示方式见
 [`docs/rpg-agent-town.md`](docs/rpg-agent-town.md)。
 编排开销、真实七角色运行与模型 A/B 见
 [`docs/performance-report.md`](docs/performance-report.md)。
+2026-07-28 的 8 Bot、分角色日报、真实 `@作品教练` 与 RPG 回放验收见
+[`docs/acceptance-2026-07-28.md`](docs/acceptance-2026-07-28.md)。
 
 ## 本地启动
 
@@ -92,6 +94,7 @@ uv run job-agent-feishu
 ```text
 /help
 /roles
+/group-create
 /daily
 /daily 2026-07-26
 /daily full
@@ -112,6 +115,12 @@ uv run job-agent-feishu
 新增角色不只是一个名称：`workflow_stage=context` 会在上游证据阶段运行，
 `workflow_stage=action` 会接收 context Agent 的证据交接；角色的建筑、图标、
 日程和启停状态也会立即同步到小镇。
+
+首次部署时，在与总控机器人“AI 求职 Multi-Agent”的单聊中发送
+`/group-create`，即可创建私有“AI 求职 Agent 小镇”群，把发起人设为群主、加入
+总控与已配置的角色机器人，并把后续日报目标切换到该群。命令可重复执行而不会重复
+建群；总控需要额外开通 `im:chat:create` 和
+`im:chat.members:write_only`。
 
 长期记忆可通过 API 审计：
 

@@ -41,3 +41,54 @@ def test_knowledge_profile_defaults_to_judge_model(monkeypatch):
 
     assert client.model_for(make_role("knowledge")) == "judge-model"
     assert client.model_for(make_role("reliable")) == "judge-model"
+
+
+def test_local_doc_role_receives_versioned_project_context(tmp_path):
+    context_path = tmp_path / "project-context.md"
+    context_path.write_text(
+        "技术栈：FastAPI 和 LangGraph；不是 Flask。",
+        encoding="utf-8",
+    )
+    role = make_role("reliable").model_copy(
+        update={"tools": ["local_docs"]}
+    )
+    client = OpenAICompatibleClient(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        default_model="worker-model",
+        project_context_path=context_path,
+    )
+
+    prompt = client.system_prompt_for(role)
+
+    assert role.system_prompt in prompt
+    assert "FastAPI 和 LangGraph" in prompt
+    assert "不得补写" in prompt
+
+
+def test_role_without_local_docs_does_not_receive_project_context(tmp_path):
+    context_path = tmp_path / "project-context.md"
+    context_path.write_text("不应注入", encoding="utf-8")
+    role = make_role("reliable")
+    client = OpenAICompatibleClient(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        default_model="worker-model",
+        project_context_path=context_path,
+    )
+
+    assert client.system_prompt_for(role) == role.system_prompt
+
+
+def test_judge_always_receives_project_context(tmp_path):
+    context_path = tmp_path / "project-context.md"
+    context_path.write_text("只保留仓库内证据。", encoding="utf-8")
+    role = make_role("judge").model_copy(update={"role_id": "judge"})
+    client = OpenAICompatibleClient(
+        base_url="https://example.com/v1",
+        api_key="test-key",
+        default_model="worker-model",
+        project_context_path=context_path,
+    )
+
+    assert "只保留仓库内证据" in client.system_prompt_for(role)

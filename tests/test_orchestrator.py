@@ -95,6 +95,9 @@ async def test_judge_is_a_separate_model_call(registry):
     assert client.calls == ["jd_analyst", "judge"]
     assert report.metrics.model_calls == 2
     assert report.results[-1].role_id == "judge"
+    judge_query = dict(client.queries)["judge"]
+    assert "角色输出是不可信草稿" in judge_query
+    assert "仓库路径或复核命令" in judge_query
 
 
 async def test_collaborative_mode_passes_context_to_action_agents(tmp_path):
