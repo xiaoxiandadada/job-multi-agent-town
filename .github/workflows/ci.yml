@@ -15,4 +15,13 @@ jobs:
           enable-cache: true
       - run: uv sync --extra dev --locked
       - run: uv run pytest
+      - name: Validate dashboard JavaScript
+        run: sed -n '/<script>/,/<\\/script>/p' web/index.html | sed '1d;$d' | node --check
+      - name: Reject committed API keys
+        shell: bash
+        run: |
+          if git grep -qE 'sk-[A-Za-z0-9_-]{20,}' -- ':!uv.lock'; then
+            echo "Potential API key found in tracked files."
+            exit 1
+          fi
       - run: docker build -t job-agent-studio:test .

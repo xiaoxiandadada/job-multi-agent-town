@@ -5,6 +5,11 @@
 飞书只负责消息入口和交互展示；模型推理由用户自己的 OpenAI-compatible API
 完成。项目不会调用飞书 AI。
 
+![真实 ActivityEvent 驱动的 Agent 小镇回放](docs/assets/agent-town-replay.jpg)
+
+上图是一次真实 `portfolio_coach` 运行的第 5/7 个事件时间步：页面显示 ACTION
+阶段、Agent 工作状态与当时延迟。回放来自持久化事件，不是预录或伪造动画。
+
 ## 核心能力
 
 - 角色注册表：通过网页/API 一键添加角色，无需改代码或重启服务。

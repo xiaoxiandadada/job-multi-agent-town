@@ -12,7 +12,8 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml ./
+COPY docker/package-readme.md ./README.md
 COPY src/job_agent_harness/__init__.py ./src/job_agent_harness/__init__.py
 
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -21,6 +22,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY src ./src
 COPY configs ./configs
 COPY web ./web
+COPY README.md ./README.md
 
 ENV PYTHONPATH=/app/src \
     PYTHONDONTWRITEBYTECODE=1

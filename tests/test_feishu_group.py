@@ -29,6 +29,22 @@ def response(payload, status=200):
     return httpx.Response(status, json=payload)
 
 
+def test_http_error_keeps_safe_feishu_code_and_message():
+    from job_agent_harness.feishu_group import _response_payload
+
+    value = response(
+        {"code": 230001, "msg": "permission denied"},
+        status=400,
+    )
+    value.request = httpx.Request("POST", "https://example.invalid")
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"创建失败（230001）：permission denied",
+    ):
+        _response_payload(value, "创建")
+
+
 @pytest.mark.asyncio
 async def test_create_group_adds_first_five_then_remaining_two(tmp_path):
     role_app_ids = [f"cli_role_{index}" for index in range(7)]

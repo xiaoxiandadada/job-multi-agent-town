@@ -98,10 +98,13 @@ def _save_agent_town_group(data_dir: Path, group: AgentTownGroup) -> None:
 
 def _response_payload(response: httpx.Response, action: str) -> dict[str, Any]:
     try:
-        response.raise_for_status()
         payload = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
+    except ValueError as exc:
         raise FeishuGroupError(f"{action}请求失败") from exc
+    if response.is_error:
+        code = payload.get("code", response.status_code)
+        message = str(payload.get("msg") or "HTTP 请求失败")
+        raise FeishuGroupError(f"{action}失败（{code}）：{message}")
     if payload.get("code") != 0:
         code = payload.get("code", "unknown")
         message = str(payload.get("msg") or "未知错误")
