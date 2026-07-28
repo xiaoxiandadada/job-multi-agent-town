@@ -6,6 +6,7 @@ import pytest
 import job_agent_harness.feishu_channel as feishu_channel
 from job_agent_harness.feishu_channel import (
     FeishuBotBinding,
+    LazyOrchestrator,
     binding_help,
     command_for_binding,
     configured_role_bot_ids,
@@ -72,6 +73,28 @@ def test_send_checked_returns_successful_result():
     )
 
     assert result is expected
+
+
+@pytest.mark.asyncio
+async def test_lazy_orchestrator_builds_once_under_concurrency():
+    created = []
+
+    class FakeOrchestrator:
+        async def run(self, request):
+            return f"done:{request}"
+
+    def factory():
+        created.append(True)
+        return FakeOrchestrator()
+
+    orchestrator = LazyOrchestrator(factory)
+    results = await asyncio.gather(
+        orchestrator.run("a"),
+        orchestrator.run("b"),
+    )
+
+    assert results == ["done:a", "done:b"]
+    assert created == [True]
 
 
 def make_role(role_id: str, display_name: str, enabled: bool = True):

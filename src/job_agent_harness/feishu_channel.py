@@ -52,6 +52,22 @@ class FeishuBotBinding:
         return self.role_id or "controller"
 
 
+class LazyOrchestrator:
+    """Delay the heavy LangGraph/model stack until the first real task."""
+
+    def __init__(self, factory):
+        self._factory = factory
+        self._orchestrator = None
+        self._lock = asyncio.Lock()
+
+    async def run(self, request):
+        if self._orchestrator is None:
+            async with self._lock:
+                if self._orchestrator is None:
+                    self._orchestrator = self._factory()
+        return await self._orchestrator.run(request)
+
+
 def role_bot_env_names(role_id: str) -> tuple[str, str]:
     prefix = re.sub(r"[^A-Z0-9]+", "_", role_id.upper()).strip("_")
     return (
@@ -494,7 +510,9 @@ def register_message_handler(
 async def run_channel() -> None:
     configure_sdk_logging()
     registry = build_registry()
-    orchestrator = build_orchestrator()
+    orchestrator = LazyOrchestrator(
+        lambda: build_orchestrator(registry=registry)
+    )
     bindings = load_bot_bindings(registry)
     if len(bindings) != 1:
         raise RuntimeError(
