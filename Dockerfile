@@ -3,8 +3,7 @@ FROM ${BASE_IMAGE}
 
 USER root
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
+ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_DEFAULT_TIMEOUT=120 \
     PYTHONNOUSERSITE=1 \
@@ -14,12 +13,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
+COPY src/job_agent_harness/__init__.py ./src/job_agent_harness/__init__.py
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --retries 10 .
+
 COPY src ./src
 COPY configs ./configs
 COPY web ./web
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install --retries 10 .
+ENV PYTHONPATH=/app/src \
+    PYTHONDONTWRITEBYTECODE=1
 
 RUN (id -u appuser >/dev/null 2>&1 \
     || useradd --create-home --uid 10001 appuser) \
