@@ -11,6 +11,7 @@ from .models import AgentResult, RunMetrics, RunReport, RunRequest
 from .orchestrator import (
     MultiAgentOrchestrator,
     build_judge_input,
+    merge_judged_output,
     workflow_stage,
 )
 
@@ -19,9 +20,11 @@ class JobAgentGraphState(TypedDict, total=False):
     run_id: str
     request: dict[str, Any]
     selected_role_ids: list[str]
-    context_role_ids: list[str]
+    discovery_role_ids: list[str]
+    analysis_role_ids: list[str]
     action_role_ids: list[str]
-    context_results: list[dict[str, Any]]
+    discovery_results: list[dict[str, Any]]
+    analysis_results: list[dict[str, Any]]
     action_results: list[dict[str, Any]]
     results: list[dict[str, Any]]
     final_output: str
@@ -44,7 +47,8 @@ class LangGraphOrchestrator:
     def _build_graph(self) -> StateGraph:
         builder = StateGraph(JobAgentGraphState)
         builder.add_node("route", self._route)
-        builder.add_node("context_phase", self._context_phase)
+        builder.add_node("discovery_phase", self._discovery_phase)
+        builder.add_node("analysis_phase", self._analysis_phase)
         builder.add_node("action_phase", self._action_phase)
         builder.add_node("judge", self._judge)
         builder.add_edge(START, "route")
@@ -52,14 +56,24 @@ class LangGraphOrchestrator:
             "route",
             self._after_route,
             {
-                "context_phase": "context_phase",
+                "discovery_phase": "discovery_phase",
+                "analysis_phase": "analysis_phase",
                 "action_phase": "action_phase",
                 "judge": "judge",
             },
         )
         builder.add_conditional_edges(
-            "context_phase",
-            self._after_context,
+            "discovery_phase",
+            self._after_discovery,
+            {
+                "analysis_phase": "analysis_phase",
+                "action_phase": "action_phase",
+                "judge": "judge",
+            },
+        )
+        builder.add_conditional_edges(
+            "analysis_phase",
+            self._after_analysis,
             {
                 "action_phase": "action_phase",
                 "judge": "judge",
@@ -73,6 +87,11 @@ class LangGraphOrchestrator:
         request = RunRequest.model_validate(state["request"])
         selected = self.base.select_roles(request)
         selected_ids = [role.role_id for role in selected]
+        self.base.create_task_graph(
+            run_id=state["run_id"],
+            request=request,
+            selected_roles=selected,
+        )
         self.base._record(
             run_id=state["run_id"],
             kind="route_completed",
@@ -84,15 +103,22 @@ class LangGraphOrchestrator:
         if request.mode != "collaborative":
             return {
                 "selected_role_ids": selected_ids,
-                "context_role_ids": [],
+                "discovery_role_ids": [],
+                "analysis_role_ids": [],
                 "action_role_ids": selected_ids,
             }
         return {
             "selected_role_ids": selected_ids,
-            "context_role_ids": [
+            "discovery_role_ids": [
                 role_id
                 for role_id in selected_ids
-                if workflow_stage(self.base.registry.get(role_id)) == "context"
+                if role_id == "job_scout"
+            ],
+            "analysis_role_ids": [
+                role_id
+                for role_id in selected_ids
+                if role_id != "job_scout"
+                and workflow_stage(self.base.registry.get(role_id)) == "context"
             ],
             "action_role_ids": [
                 role_id
@@ -103,26 +129,28 @@ class LangGraphOrchestrator:
 
     @staticmethod
     def _after_route(state: JobAgentGraphState) -> str:
-        if state.get("context_role_ids"):
-            return "context_phase"
+        if state.get("discovery_role_ids"):
+            return "discovery_phase"
+        if state.get("analysis_role_ids"):
+            return "analysis_phase"
         if state.get("action_role_ids"):
             return "action_phase"
         return "judge"
 
-    async def _context_phase(
+    async def _discovery_phase(
         self,
         state: JobAgentGraphState,
     ) -> dict[str, Any]:
         request = RunRequest.model_validate(state["request"])
         roles = [
             self.base.registry.get(role_id)
-            for role_id in state.get("context_role_ids", [])
+            for role_id in state.get("discovery_role_ids", [])
         ]
         self.base._record(
             run_id=state["run_id"],
             kind="phase_started",
             status="running",
-            phase="context",
+            phase="discovery",
             mode=request.mode,
             selected_role_ids=[role.role_id for role in roles],
         )
@@ -130,12 +158,77 @@ class LangGraphOrchestrator:
             roles,
             request.query,
             run_id=state["run_id"],
-            phase="context",
+            phase="discovery",
         )
-        return {"context_results": [result.model_dump() for result in results]}
+        return {
+            "discovery_results": [
+                result.model_dump() for result in results
+            ]
+        }
 
     @staticmethod
-    def _after_context(state: JobAgentGraphState) -> str:
+    def _after_discovery(state: JobAgentGraphState) -> str:
+        if state.get("analysis_role_ids"):
+            return "analysis_phase"
+        return "action_phase" if state.get("action_role_ids") else "judge"
+
+    async def _analysis_phase(
+        self,
+        state: JobAgentGraphState,
+    ) -> dict[str, Any]:
+        request = RunRequest.model_validate(state["request"])
+        discovery_results = [
+            AgentResult.model_validate(value)
+            for value in state.get("discovery_results", [])
+        ]
+        discovery_output = self.base._format_results(discovery_results)
+        query = request.query
+        if discovery_output:
+            query = (
+                f"用户原始任务：{request.query}\n\n"
+                "以下是岗位侦察员先完成的岗位与来源证据。"
+                "请基于该证据做专业分析，不要重新猜测岗位事实：\n\n"
+                f"{discovery_output}"
+            )
+        roles = [
+            self.base.registry.get(role_id)
+            for role_id in state.get("analysis_role_ids", [])
+        ]
+        if discovery_output and roles:
+            self.base._record(
+                run_id=state["run_id"],
+                kind="handoff_created",
+                status="completed",
+                phase="analysis",
+                mode=request.mode,
+                output=discovery_output,
+                source_role_ids=[
+                    result.role_id for result in discovery_results
+                ],
+                target_role_ids=[role.role_id for role in roles],
+            )
+        self.base._record(
+            run_id=state["run_id"],
+            kind="phase_started",
+            status="running",
+            phase="analysis",
+            mode=request.mode,
+            selected_role_ids=[role.role_id for role in roles],
+        )
+        results = await self.base._run_parallel(
+            roles,
+            query,
+            run_id=state["run_id"],
+            phase="analysis",
+        )
+        return {
+            "analysis_results": [
+                result.model_dump() for result in results
+            ]
+        }
+
+    @staticmethod
+    def _after_analysis(state: JobAgentGraphState) -> str:
         return "action_phase" if state.get("action_role_ids") else "judge"
 
     async def _action_phase(
@@ -143,16 +236,21 @@ class LangGraphOrchestrator:
         state: JobAgentGraphState,
     ) -> dict[str, Any]:
         request = RunRequest.model_validate(state["request"])
-        context_results = [
+        discovery_results = [
             AgentResult.model_validate(value)
-            for value in state.get("context_results", [])
+            for value in state.get("discovery_results", [])
         ]
+        analysis_results = [
+            AgentResult.model_validate(value)
+            for value in state.get("analysis_results", [])
+        ]
+        context_results = [*discovery_results, *analysis_results]
         context_output = self.base._format_results(context_results)
         query = request.query
         if context_output:
             query = (
                 f"用户原始任务：{request.query}\n\n"
-                "以下是上游 Agent 已完成的岗位情报、JD 分析与知识补充。"
+                "以下是上游 Agent 已完成的岗位发现、JD 分析与知识补充。"
                 "请基于这些证据继续工作，并指出仍待核验的内容：\n\n"
                 f"{context_output}"
             )
@@ -206,7 +304,8 @@ class LangGraphOrchestrator:
         results = [
             AgentResult.model_validate(value)
             for value in [
-                *state.get("context_results", []),
+                *state.get("discovery_results", []),
+                *state.get("analysis_results", []),
                 *state.get("action_results", []),
             ]
         ]
@@ -230,6 +329,10 @@ class LangGraphOrchestrator:
                 judge_input = build_judge_input(
                     request.query,
                     final_output,
+                    preserve_role_answer=(
+                        len(successful) == 1
+                        and successful[0].role_id != "judge"
+                    ),
                 )
                 judge_result = await self.base._run_role(
                     judge,
@@ -239,8 +342,11 @@ class LangGraphOrchestrator:
                 )
                 results.append(judge_result)
                 judge_called = True
-                if judge_result.status == "ok":
-                    final_output = judge_result.output
+                final_output = merge_judged_output(
+                    successful,
+                    final_output,
+                    judge_result,
+                )
         return {
             "results": [result.model_dump() for result in results],
             "final_output": final_output,

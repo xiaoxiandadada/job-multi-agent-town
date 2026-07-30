@@ -2,7 +2,10 @@ import pytest
 
 from job_agent_harness.model_client import MockModelClient
 from job_agent_harness.models import RoleSpec, RunRequest
-from job_agent_harness.orchestrator import MultiAgentOrchestrator
+from job_agent_harness.orchestrator import (
+    MultiAgentOrchestrator,
+    close_unbalanced_code_fence,
+)
 from job_agent_harness.registry import RoleRegistry
 
 
@@ -15,6 +18,11 @@ def role(role_id, keyword, profile="default"):
         trigger_keywords=[keyword],
         model_profile=profile,
     )
+
+
+def test_close_unbalanced_code_fence():
+    assert close_unbalanced_code_fence("```json\n{}") == "```json\n{}\n```"
+    assert close_unbalanced_code_fence("```json\n{}\n```") == "```json\n{}\n```"
 
 
 @pytest.fixture
@@ -98,6 +106,11 @@ async def test_judge_is_a_separate_model_call(registry):
     judge_query = dict(client.queries)["judge"]
     assert "角色输出是不可信草稿" in judge_query
     assert "仓库路径或复核命令" in judge_query
+    assert "不要重写或压缩角色正文" in judge_query
+    assert "## jd_analyst" in report.final_output
+    assert "## 证据审核员补充" in report.final_output
+    assert report.results[0].output in report.final_output
+    assert report.results[-1].output in report.final_output
 
 
 async def test_collaborative_mode_passes_context_to_action_agents(tmp_path):

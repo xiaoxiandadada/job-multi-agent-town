@@ -250,8 +250,14 @@
       display: none; margin: 0 0 12px; padding: 9px 10px; border-left: 2px solid var(--amber);
       color: #d7c8a6; background: rgba(245,200,115,.06); font-size: 10px; line-height: 1.55;
     }
+    .town-task-summary {
+      display: none; margin: 0 0 12px; padding: 10px; border: 1px solid #30483f;
+      border-radius: 8px; background: #0a1511; color: #bfd1ca; font-size: 10px;
+      line-height: 1.55;
+    }
+    .town-task-summary strong { display: block; color: var(--green); margin-bottom: 4px; }
     .pipeline {
-      display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
+      display: grid; grid-template-columns: repeat(5, 1fr); gap: 0;
       border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
       background: var(--panel);
     }
@@ -271,6 +277,62 @@
       border-radius: 50%; background: var(--green); animation: pulse 1.2s infinite;
     }
     @keyframes pulse { 50% { opacity: .25; transform: scale(.75); } }
+    .task-board {
+      border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+      background: var(--panel); box-shadow: var(--shadow);
+    }
+    .task-board-head {
+      display: grid; grid-template-columns: minmax(0,1fr) minmax(220px,.55fr);
+      gap: 20px; align-items: center; padding: 18px 20px; border-bottom: 1px solid var(--line);
+    }
+    .task-board-head strong { display: block; font-size: 15px; }
+    .task-board-head span { color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .task-progress-track {
+      height: 8px; overflow: hidden; border-radius: 999px; background: #07100e;
+      border: 1px solid #283d35;
+    }
+    .task-progress-bar {
+      width: 0; height: 100%; border-radius: inherit;
+      background: linear-gradient(90deg, var(--green-2), var(--green));
+      transition: width .35s ease;
+    }
+    .task-progress-label {
+      display: flex; justify-content: space-between; margin-bottom: 7px;
+      color: var(--muted); font: 10px ui-monospace, monospace;
+    }
+    .task-lanes {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      align-items: start; gap: 0; overflow-x: auto;
+    }
+    .task-lane { min-width: 210px; padding: 15px; border-right: 1px solid var(--line); }
+    .task-lane:last-child { border-right: 0; }
+    .task-lane h3 {
+      margin: 0 0 12px; color: var(--muted); font: 700 10px ui-monospace, monospace;
+      letter-spacing: .12em; text-transform: uppercase;
+    }
+    .task-card {
+      margin-bottom: 10px; padding: 12px; border: 1px solid #2b4239;
+      border-radius: 10px; background: #0a1511;
+    }
+    .task-card.running { border-color: #4a8b74; box-shadow: 0 0 18px rgba(124,242,189,.08); }
+    .task-card.completed { border-color: rgba(130,185,255,.45); }
+    .task-card.error, .task-card.timeout { border-color: rgba(255,136,124,.55); }
+    .task-card.blocked { opacity: .68; }
+    .task-card-head { display: flex; justify-content: space-between; gap: 8px; align-items: start; }
+    .task-card h4 { margin: 0; font-size: 12px; line-height: 1.45; }
+    .task-card p { margin: 9px 0; color: #aebfb9; font-size: 10px; line-height: 1.55; }
+    .task-deps { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+    .task-deps code {
+      padding: 3px 5px; border-radius: 5px; background: #13231d;
+      color: var(--amber); font: 9px ui-monospace, monospace;
+    }
+    .task-criteria { margin: 8px 0 0; padding-left: 15px; color: var(--muted); font-size: 9px; line-height: 1.55; }
+    .task-card footer {
+      display: flex; justify-content: space-between; gap: 8px; margin-top: 10px;
+      color: var(--muted); font: 9px ui-monospace, monospace;
+    }
+    .mini-progress { height: 3px; margin-top: 8px; background: #1b2a25; }
+    .mini-progress i { display: block; height: 100%; background: var(--green); }
     .agents {
       display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px;
     }
@@ -306,6 +368,11 @@
       display: flex; justify-content: space-between; gap: 8px; padding-top: 12px;
       border-top: 1px solid var(--line); color: var(--muted); font: 10px ui-monospace, monospace;
     }
+    .agent-model-config {
+      display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 6px; margin-bottom: 10px;
+    }
+    .agent-model-config input { min-width: 0; margin: 0; padding: 7px 8px; font-size: 9px; }
+    .agent-model-config button { padding: 7px 8px; }
     .workbench { display: grid; grid-template-columns: .8fr 1.2fr; gap: 14px; }
     .panel { border: 1px solid var(--line); border-radius: 16px; background: var(--panel); padding: 20px; }
     .panel h3 { margin: 0 0 17px; font-size: 15px; }
@@ -363,6 +430,7 @@
       .town-map { min-height: 720px; }
       .building { width: 108px; }
       .speech { width: 125px; }
+      .task-board-head { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -391,7 +459,7 @@
 
   <section class="metrics">
     <div class="metric"><span>当前阶段</span><strong id="m-phase">IDLE</strong></div>
-    <div class="metric"><span>已完成 Agent</span><strong id="m-complete">0 / 7</strong></div>
+    <div class="metric"><span>已完成任务</span><strong id="m-complete">0 / 7</strong></div>
     <div class="metric"><span>模型调用</span><strong id="m-calls">0</strong></div>
     <div class="metric"><span>端到端延迟</span><strong id="m-latency">—</strong></div>
     <div class="metric"><span>并行加速估算</span><strong id="m-speedup">—</strong></div>
@@ -424,7 +492,8 @@
     <div class="town-map" id="town-map">
       <svg class="town-roads" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
         <path class="road-base" d="M50 45 L13 20 M50 45 L33 17 M50 45 L76 20 M50 45 L16 68 M50 45 L39 72 M50 45 L70 70 M50 45 L86 50"/>
-        <path class="road-flow" data-phase="context" d="M50 45 L13 20 M50 45 L33 17 M50 45 L76 20"/>
+        <path class="road-flow" data-phase="discovery" d="M50 45 L13 20"/>
+        <path class="road-flow" data-phase="analysis" d="M50 45 L33 17 M50 45 L76 20"/>
         <path class="road-flow" data-phase="action" d="M50 45 L16 68 M50 45 L39 72 M50 45 L70 70"/>
         <path class="road-flow" data-phase="judge" d="M50 45 L86 50"/>
       </svg>
@@ -446,9 +515,10 @@
       </article>
       <article>
         <div class="town-memory-head">
-          <h3>角色日程与记忆流</h3>
+          <h3>角色任务、日程与记忆流</h3>
           <span id="town-memory-role">—</span>
         </div>
+        <div class="town-task-summary" id="town-task-summary"></div>
         <ul class="town-schedule" id="town-schedule"></ul>
         <div class="town-reflection" id="town-reflection"></div>
         <div class="town-stream" id="town-memory">
@@ -460,13 +530,34 @@
 
   <div class="section-head">
     <div><p class="eyebrow">execution graph</p><h2>运行阶段</h2></div>
-    <p>规则路由不消耗模型；Context 与 Action 阶段内部并发。</p>
+    <p>岗位发现先行；JD 与知识并行分析；行动 Agent 在依赖满足后并行。</p>
   </div>
   <section class="pipeline" id="pipeline">
     <div class="phase" data-phase="route"><span class="step">01 / ROUTE</span><strong>选择角色</strong></div>
-    <div class="phase" data-phase="context"><span class="step">02 / CONTEXT</span><strong>岗位证据并行</strong></div>
-    <div class="phase" data-phase="action"><span class="step">03 / ACTION</span><strong>求职动作并行</strong></div>
-    <div class="phase" data-phase="judge"><span class="step">04 / JUDGE</span><strong>证据审核</strong></div>
+    <div class="phase" data-phase="discovery"><span class="step">02 / DISCOVER</span><strong>发现与核验岗位</strong></div>
+    <div class="phase" data-phase="analysis"><span class="step">03 / ANALYZE</span><strong>JD 与知识并行</strong></div>
+    <div class="phase" data-phase="action"><span class="step">04 / ACT</span><strong>简历/作品/面试</strong></div>
+    <div class="phase" data-phase="judge"><span class="step">05 / JUDGE</span><strong>证据审核</strong></div>
+  </section>
+
+  <div class="section-head">
+    <div><p class="eyebrow">task dependency graph</p><h2>任务拆解、依赖与进度</h2></div>
+    <p>每个节点来自真实运行任务图；不是根据角色状态临时拼出来的动画。</p>
+  </div>
+  <section class="task-board">
+    <div class="task-board-head">
+      <div>
+        <strong id="task-graph-title">等待任务图</strong>
+        <span id="task-graph-query">启动一次团队任务或等待每日求职日报。</span>
+      </div>
+      <div>
+        <div class="task-progress-label"><span id="task-graph-status">QUEUED</span><span id="task-graph-progress-label">0%</span></div>
+        <div class="task-progress-track"><div class="task-progress-bar" id="task-graph-progress"></div></div>
+      </div>
+    </div>
+    <div class="task-lanes" id="task-lanes">
+      <div class="empty">还没有任务依赖图。</div>
+    </div>
   </section>
 
   <div class="section-head">
@@ -485,7 +576,7 @@
       <textarea id="query">分析目标 AI Agent 岗位，并给出 JD 缺口、简历、作品和面试准备建议</textarea>
       <div class="controls">
         <select id="mode">
-          <option value="collaborative">collaborative · 两阶段协作</option>
+          <option value="collaborative">collaborative · 依赖式协作</option>
           <option value="parallel">parallel · 全并行</option>
           <option value="sequential">sequential · 顺序对照</option>
           <option value="single">single · 单角色</option>
@@ -515,6 +606,7 @@
           <input id="role-place" placeholder="建筑名称">
           <input id="role-icon" placeholder="建筑图标，如 🧬">
           <input id="role-schedule" placeholder="日程，逗号分隔">
+          <input id="role-model" class="wide" list="model-options" placeholder="可选：直接指定模型 ID；留空使用 profile">
           <button class="primary" onclick="addRole()">添加并启用</button>
         </div>
       </details>
@@ -536,16 +628,19 @@
     </table>
   </section>
 </main>
+<datalist id="model-options"></datalist>
 <script>
 const state = {
   roles: [],
   events: [],
   runtime: {},
   town: {},
+  models: {profiles: {}, roles: [], catalog: []},
+  modelCatalogLoaded: false,
   requestPending: false,
   replay: {runId: '', step: 0}
 };
-const phaseOrder = ['route', 'context', 'action', 'judge'];
+const phaseOrder = ['route', 'discovery', 'analysis', 'action', 'judge'];
 const townLayout = {
   job_scout: {x: 13, y: 20, icon: '📡', place: '机会驿站'},
   jd_analyst: {x: 33, y: 17, icon: '🔎', place: 'JD 研究所'},
@@ -667,7 +762,59 @@ function activePhase(run) {
   if (run.events.some(event => event.kind === 'run_completed')) return 'completed';
   const started = run.events.filter(event => event.kind === 'phase_started').at(-1);
   if (started) return started.phase;
-  return run.events.some(event => event.kind === 'route_completed') ? 'context' : 'route';
+  return run.events.some(event => event.kind === 'route_completed') ? 'discovery' : 'route';
+}
+
+function resolvedModelFor(role) {
+  return state.models.roles?.find(item => item.role_id === role.role_id)?.resolved_model
+    || role.model
+    || role.model_profile
+    || 'default';
+}
+
+function renderTaskGraph(graph) {
+  if (!graph) {
+    $('#task-graph-title').textContent = '等待任务图';
+    $('#task-graph-query').textContent = '启动一次团队任务或等待每日求职日报。';
+    $('#task-graph-status').textContent = 'QUEUED';
+    $('#task-graph-progress-label').textContent = '0%';
+    $('#task-graph-progress').style.width = '0%';
+    $('#task-lanes').innerHTML = '<div class="empty">还没有任务依赖图。</div>';
+    return;
+  }
+  $('#task-graph-title').textContent = `${graph.title} · ${graph.run_id.slice(0, 8)}`;
+  $('#task-graph-query').textContent = short(graph.query, 220);
+  $('#task-graph-status').textContent = `${String(graph.status).toUpperCase()} · ${graph.source}`;
+  $('#task-graph-progress-label').textContent = `${graph.progress}%`;
+  $('#task-graph-progress').style.width = `${graph.progress}%`;
+  const order = ['delivery', 'discovery', 'analysis', 'action', 'judge'];
+  const labels = {
+    delivery: 'DAILY DELIVERY',
+    discovery: 'DISCOVERY',
+    analysis: 'ANALYSIS',
+    action: 'ACTION',
+    judge: 'JUDGE'
+  };
+  const phases = order.filter(phase => graph.tasks.some(task => task.phase === phase));
+  $('#task-lanes').innerHTML = phases.map(phase => {
+    const tasks = graph.tasks.filter(task => task.phase === phase);
+    return `<article class="task-lane"><h3>${labels[phase] || phase}</h3>${tasks.map(task => {
+      const dependencies = task.depends_on?.length
+        ? `<div class="task-deps"><code>DEPENDS ←</code>${task.depends_on.map(item => `<code>${escapeHtml(item)}</code>`).join('')}</div>`
+        : '<div class="task-deps"><code>NO DEPENDENCY</code></div>';
+      const criteria = (task.acceptance_criteria || []).slice(0, 3).map(item =>
+        `<li>${escapeHtml(item)}</li>`
+      ).join('');
+      return `<section class="task-card ${escapeHtml(task.status)}">
+        <div class="task-card-head"><h4>${escapeHtml(task.title)}</h4><span class="pill ${escapeHtml(task.status)}">${escapeHtml(task.status)}</span></div>
+        <p>${escapeHtml(short(task.description, 180))}</p>
+        ${dependencies}
+        <ul class="task-criteria">${criteria}</ul>
+        <div class="mini-progress"><i style="width:${Number(task.progress) || 0}%"></i></div>
+        <footer><span>${escapeHtml(task.role_id)}</span><span>${escapeHtml(task.model || 'pending')}</span><span>${Number(task.progress) || 0}%</span></footer>
+      </section>`;
+    }).join('')}</article>`;
+  }).join('');
 }
 
 function ensureTownElements() {
@@ -754,6 +901,15 @@ function renderTown(run, phase) {
     <code>${escapeHtml(label)} · ${escapeHtml(focus.model)} · ${fmtMs(focus.latency)}</code>`;
   $('#town-clock').textContent = state.town.town_time || 'RUNTIME VIEW';
   $('#town-memory-role').textContent = focusRole.role_id;
+  const task = state.town.task_graph?.tasks?.find(item => item.role_id === focusRole.role_id);
+  $('#town-task-summary').style.display = task ? 'block' : 'none';
+  $('#town-task-summary').innerHTML = task
+    ? `<strong>${escapeHtml(task.title)} · ${Number(task.progress) || 0}%</strong>
+       <span>${escapeHtml(short(task.description, 260))}</span>
+       <div class="task-deps">${task.depends_on?.length
+         ? `<code>DEPENDS ←</code>${task.depends_on.map(item => `<code>${escapeHtml(item)}</code>`).join('')}`
+         : '<code>NO DEPENDENCY</code>'}</div>`
+    : '';
   $('#town-schedule').innerHTML = (townAgent?.schedule || []).map(item =>
     `<li>${escapeHtml(item)}</li>`
   ).join('');
@@ -791,6 +947,8 @@ function render() {
     current?.events.flatMap(event => event.selected_role_ids || []) || []
   );
   completedAgents.forEach(event => expectedRoleIds.add(event.role_id));
+  const taskGraph = state.town.task_graph;
+  const completedTasks = taskGraph?.tasks?.filter(task => task.status === 'completed').length || 0;
   const metrics = completeEvent?.metrics || {};
   const firstTime = current ? Date.parse(current.first.timestamp) : 0;
   const lastTime = current ? Date.parse((completeEvent || failedEvent || current.last).timestamp) : 0;
@@ -804,11 +962,14 @@ function render() {
     : failedEvent ? '运行失败' : completeEvent ? (partialFailure ? '运行完成（含失败）' : '运行完成') : current ? 'Agent 正在协作' : '等待任务';
   $('#run-query').textContent = current?.first.query_excerpt || '从飞书 @角色，或在下方启动一次团队任务。';
   $('#m-phase').textContent = phase.toUpperCase();
-  $('#m-complete').textContent = `${okCount} / ${expectedRoleIds.size || state.roles.filter(role => role.enabled).length}`;
+  $('#m-complete').textContent = taskGraph
+    ? `${completedTasks} / ${taskGraph.tasks.length}`
+    : `${okCount} / ${expectedRoleIds.size || state.roles.filter(role => role.enabled).length}`;
   $('#m-calls').textContent = metrics.model_calls ?? completedAgents.length;
   $('#m-latency').textContent = fmtMs(metrics.wall_latency_ms ?? elapsed);
   $('#m-speedup').textContent = metrics.parallel_speedup_estimate ? `${metrics.parallel_speedup_estimate.toFixed(2)}×` : '—';
   renderTown(current, phase);
+  renderTaskGraph(taskGraph);
 
   const touchedPhases = new Set(
     current?.events
@@ -835,8 +996,12 @@ function render() {
       <h3>${escapeHtml(role.display_name)}</h3>
       <span class="role-id">${escapeHtml(role.role_id)}</span>
       <p class="agent-output">${escapeHtml(short(value.output))}</p>
+      <div class="agent-model-config">
+        <input id="model-${escapeHtml(role.role_id)}" list="model-options" value="${escapeHtml(role.model || '')}" placeholder="${escapeHtml(resolvedModelFor(role))}" aria-label="${escapeHtml(role.display_name)}模型">
+        <button class="secondary" onclick="configureRoleModel('${escapeHtml(role.role_id)}')">应用模型</button>
+      </div>
       <button class="secondary" onclick="toggleRole('${escapeHtml(role.role_id)}', ${role.enabled ? 'false' : 'true'})">${role.enabled ? '暂停角色' : '启用角色'}</button>
-      <div class="agent-meta"><span>${escapeHtml(value.phase)}</span><span>${escapeHtml(value.model)}</span><span>${fmtMs(value.latency)}</span></div>
+      <div class="agent-meta"><span>${escapeHtml(value.phase)}</span><span>${escapeHtml(value.model === '—' ? resolvedModelFor(role) : value.model)}</span><span>${fmtMs(value.latency)}</span></div>
     </article>`;
   }).join('');
 
@@ -868,19 +1033,29 @@ async function refresh() {
       if (state.replay.step) townParams.set('step', String(state.replay.step));
     }
     const townUrl = `/api/town${townParams.size ? `?${townParams}` : ''}`;
-    const [roles, events, runtime, town] = await Promise.all([
+    const modelUrl = state.modelCatalogLoaded ? '/api/models' : '/api/models?catalog=true';
+    const [roles, events, runtime, town, models] = await Promise.all([
       fetch('/api/roles').then(response => response.json()),
       fetch('/api/activity?limit=1000').then(response => response.json()),
       fetch('/api/runtime').then(response => response.json()),
       fetch(townUrl).then(response => {
         if (!response.ok) throw new Error(`Town ${response.status}`);
         return response.json();
-      })
+      }),
+      fetch(modelUrl).then(response => response.json())
     ]);
     state.roles = roles;
     state.events = events;
     state.runtime = runtime;
     state.town = town;
+    state.models = {
+      ...models,
+      catalog: models.catalog?.length ? models.catalog : state.models.catalog
+    };
+    state.modelCatalogLoaded = true;
+    $('#model-options').innerHTML = (state.models.catalog || []).map(model =>
+      `<option value="${escapeHtml(model)}"></option>`
+    ).join('');
     render();
   } catch (error) {
     $('#runtime-name').textContent = `Runtime disconnected · ${error.message}`;
@@ -950,6 +1125,7 @@ async function addRole() {
     trigger_keywords: $('#role-keywords').value.split(',').map(value => value.trim()).filter(Boolean),
     tools: [],
     model_profile: 'default',
+    model: $('#role-model').value.trim() || null,
     workflow_stage: $('#role-stage').value,
     enabled: true,
     town_place: $('#role-place').value || null,
@@ -1018,6 +1194,23 @@ async function toggleRole(roleId, enabled) {
     return;
   }
   $('#output').textContent = `${payload.role.display_name} 已${enabled ? '启用' : '暂停'}，registry version=${payload.registry_version}`;
+  await refresh();
+}
+
+async function configureRoleModel(roleId) {
+  const input = document.getElementById(`model-${roleId}`);
+  const model = input?.value.trim() || null;
+  const response = await fetch(`/api/roles/${encodeURIComponent(roleId)}`, {
+    method:'PATCH',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({model})
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    $('#output').textContent = `模型配置失败：${JSON.stringify(payload)}`;
+    return;
+  }
+  $('#output').textContent = `${payload.role.display_name} 模型已更新为 ${model || 'profile fallback'}，下一次 @ 该角色立即生效。`;
   await refresh();
 }
 

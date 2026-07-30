@@ -13,6 +13,7 @@ class RoleSpec(BaseModel):
     trigger_keywords: list[str] = Field(default_factory=list)
     tools: list[str] = Field(default_factory=list)
     model_profile: str = "default"
+    model: str | None = Field(default=None, min_length=2, max_length=200)
     workflow_stage: Literal["auto", "context", "action", "judge"] = "auto"
     enabled: bool = True
     timeout_seconds: float = Field(default=45.0, ge=1.0, le=180.0)
@@ -39,6 +40,7 @@ class RolePatch(BaseModel):
     trigger_keywords: list[str] | None = None
     tools: list[str] | None = None
     model_profile: str | None = None
+    model: str | None = Field(default=None, min_length=2, max_length=200)
     workflow_stage: Literal["auto", "context", "action", "judge"] | None = None
     enabled: bool | None = None
     timeout_seconds: float | None = Field(default=None, ge=1.0, le=180.0)

@@ -2,6 +2,7 @@ from job_agent_harness.activity import ActivityEvent
 from job_agent_harness.models import RoleSpec
 from job_agent_harness.registry import RoleRegistry
 from job_agent_harness.town import build_town_snapshot
+from job_agent_harness.tasks import build_run_task_graph
 
 
 def make_role(role_id: str, display_name: str) -> RoleSpec:
@@ -146,3 +147,65 @@ def test_town_snapshot_exposes_historical_replay_position(tmp_path):
     assert snapshot.replay.total_steps == 5
     assert snapshot.town_time == "2026-07-28 09:00:02"
     assert snapshot.agents[0].status == "queued"
+
+
+def test_town_replay_projects_task_dependencies_without_future_status(
+    tmp_path,
+):
+    scout = make_role("job_scout", "岗位侦察员")
+    resume = make_role("resume_strategist", "简历策略师").model_copy(
+        update={"workflow_stage": "action"}
+    )
+    registry = RoleRegistry(tmp_path / "roles.json")
+    registry.replace_all([scout, resume])
+    graph = build_run_task_graph(
+        run_id="task-replay",
+        query="先找岗位再改简历",
+        roles=[scout, resume],
+        mode="collaborative",
+        use_judge=False,
+    )
+    final_graph = graph.model_copy(deep=True)
+    for task in final_graph.tasks:
+        task.status = "completed"
+        task.progress = 100
+    final_graph.status = "completed"
+    final_graph.progress = 100
+    events = [
+        ActivityEvent(
+            timestamp="2026-07-28T01:00:00+00:00",
+            run_id="task-replay",
+            kind="run_started",
+            status="running",
+            orchestrator="langgraph",
+            phase="route",
+        ),
+        ActivityEvent(
+            timestamp="2026-07-28T01:00:01+00:00",
+            run_id="task-replay",
+            kind="task_started",
+            status="running",
+            orchestrator="langgraph",
+            phase="discovery",
+            role_id="job_scout",
+            task_id="job_scout",
+            task_title="核验岗位",
+            progress=50,
+        ),
+    ]
+
+    snapshot = build_town_snapshot(
+        registry,
+        events,
+        replay_step=2,
+        replay_total_steps=8,
+        task_graph=final_graph,
+    )
+    by_id = {
+        task.task_id: task for task in snapshot.task_graph.tasks
+    }
+
+    assert by_id["job_scout"].status == "running"
+    assert by_id["job_scout"].progress == 50
+    assert by_id["resume_strategist"].status == "blocked"
+    assert snapshot.task_graph.progress == 25

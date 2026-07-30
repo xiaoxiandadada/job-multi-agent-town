@@ -1,0 +1,32 @@
+[
+  {
+    "model": "Qwen/Qwen2.5-32B-Instruct",
+    "task": "Agent Evaluation golden set explanation",
+    "successful_runs": 1,
+    "latency_ms": 22566,
+    "visible_characters": 968,
+    "structure_checks_passed": 5,
+    "structure_checks_total": 5,
+    "notes": "结构完整、可作为低延迟通用 worker，但工程细节较泛。"
+  },
+  {
+    "model": "Qwen/Qwen3.5-35B-A3B",
+    "task": "Agent Evaluation golden set explanation",
+    "successful_runs": 0,
+    "latency_ms": 8216,
+    "visible_characters": 0,
+    "structure_checks_passed": 0,
+    "structure_checks_total": 5,
+    "notes": "当前 OpenAI-compatible 客户端没有取得可见 content，暂不进入生产角色配置。"
+  },
+  {
+    "model": "Qwen/Qwen3.5-397B-A17B",
+    "task": "Agent Evaluation golden set explanation",
+    "successful_runs": 1,
+    "latency_ms": 46168,
+    "visible_characters": 697,
+    "structure_checks_passed": 5,
+    "structure_checks_total": 5,
+    "notes": "包含具体 JSON schema、工具步骤、效率指标和失败模式，选为岗位知识补充员专用模型。"
+  }
+]

@@ -15,7 +15,9 @@ from .runtime import (
     build_memory_store,
     build_orchestrator,
     build_registry,
+    build_task_graph_store,
 )
+from .tasks import TaskGraph
 from .town import TownSnapshot, build_town_snapshot
 
 
@@ -24,7 +26,10 @@ def create_app() -> FastAPI:
     registry = build_registry()
     activity_store = build_activity_store()
     memory_store = build_memory_store()
+    task_graph_store = build_task_graph_store()
     orchestrator = build_orchestrator(registry, memory_store)
+    base_orchestrator = getattr(orchestrator, "base", orchestrator)
+    model_client = base_orchestrator.model_client
 
     @app.get("/")
     async def index():
@@ -48,9 +53,64 @@ def create_app() -> FastAPI:
         return {
             "orchestrator": type(orchestrator).__name__,
             "default_mode": "collaborative",
-            "phases": ["route", "context", "action", "judge"],
+            "phases": [
+                "route",
+                "discovery",
+                "analysis",
+                "action",
+                "judge",
+            ],
             "graph_mermaid": mermaid,
         }
+
+    @app.get("/api/models")
+    async def models(catalog: bool = False):
+        available: list[str] = []
+        catalog_error: str | None = None
+        if catalog and hasattr(model_client, "available_models"):
+            try:
+                available = await model_client.available_models()
+            except Exception as exc:
+                catalog_error = type(exc).__name__
+        roles = registry.list_roles(include_disabled=True)
+        return {
+            "profiles": (
+                model_client.profile_models()
+                if hasattr(model_client, "profile_models")
+                else {}
+            ),
+            "roles": [
+                {
+                    "role_id": role.role_id,
+                    "model_profile": role.model_profile,
+                    "model_override": role.model,
+                    "resolved_model": (
+                        model_client.model_for(role)
+                        if hasattr(model_client, "model_for")
+                        else "unknown"
+                    ),
+                }
+                for role in roles
+            ],
+            "catalog": available,
+            "catalog_error": catalog_error,
+        }
+
+    @app.get("/api/task-graphs", response_model=list[TaskGraph])
+    async def task_graphs(
+        limit: int = Query(default=50, ge=1, le=500),
+    ):
+        return task_graph_store.list(limit=limit)
+
+    @app.get("/api/task-graphs/{run_id}", response_model=TaskGraph)
+    async def task_graph(run_id: str):
+        graph = task_graph_store.get(run_id)
+        if graph is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"unknown task graph: {run_id}",
+            )
+        return graph
 
     @app.get("/api/activity", response_model=list[ActivityEvent])
     async def activity(
@@ -82,11 +142,18 @@ def create_app() -> FastAPI:
                 memory_store=None,
                 replay_step=replay_step,
                 replay_total_steps=total_steps,
+                task_graph=task_graph_store.get(run_id),
             )
+        current_run_id = events[-1].run_id if events else None
         return build_town_snapshot(
             registry,
             events,
             memory_store=memory_store,
+            task_graph=(
+                task_graph_store.get(current_run_id)
+                if current_run_id
+                else None
+            ),
         )
 
     @app.get("/api/roles", response_model=list[RoleSpec])

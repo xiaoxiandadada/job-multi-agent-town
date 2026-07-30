@@ -48,7 +48,7 @@ async def test_langgraph_persists_live_activity_events(tmp_path):
     assert events[-1].kind == "run_completed"
     assert {event.phase for event in events} >= {
         "route",
-        "context",
+        "discovery",
         "action",
         "judge",
     }

@@ -4,6 +4,8 @@ from job_agent_harness.activity import ActivityEvent, ActivityStore
 from job_agent_harness.model_client import MockModelClient
 from job_agent_harness.orchestrator import MultiAgentOrchestrator
 from job_agent_harness.api import create_app
+from job_agent_harness.models import RoleSpec
+from job_agent_harness.tasks import TaskGraphStore, build_run_task_graph
 
 
 def test_role_can_be_added_without_restart(tmp_path, monkeypatch):
@@ -60,6 +62,81 @@ def test_role_can_be_paused_and_reconfigured_without_restart(
     )
     assert agent["status"] == "disabled"
     assert agent["place"] == "作品实验室"
+
+
+def test_role_model_can_be_configured_and_resolved_without_restart(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("JOB_AGENT_DATA_DIR", str(tmp_path))
+    client = TestClient(create_app())
+
+    response = client.patch(
+        "/api/roles/job_knowledge_curator",
+        json={"model": "Qwen/custom-knowledge-model"},
+    )
+
+    assert response.status_code == 200
+    assert (
+        response.json()["role"]["model"]
+        == "Qwen/custom-knowledge-model"
+    )
+    models = client.get("/api/models").json()
+    configured = next(
+        item
+        for item in models["roles"]
+        if item["role_id"] == "job_knowledge_curator"
+    )
+    assert configured["resolved_model"] == "Qwen/custom-knowledge-model"
+
+
+def test_task_graph_api_returns_dependencies_and_progress(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("JOB_AGENT_DATA_DIR", str(tmp_path))
+    roles = [
+        RoleSpec(
+            role_id="job_scout",
+            display_name="岗位侦察员",
+            goal="发现并核验中国 2027 届正式校招岗位",
+            system_prompt="只输出有官方来源的岗位。",
+            workflow_stage="context",
+        ),
+        RoleSpec(
+            role_id="resume_strategist",
+            display_name="简历策略师",
+            goal="根据岗位证据选择简历版本并改写 bullet",
+            system_prompt="只基于真实项目证据改写简历。",
+            workflow_stage="action",
+        ),
+    ]
+    store = TaskGraphStore(tmp_path / "task_graphs")
+    store.create(
+        build_run_task_graph(
+            run_id="api-task-run",
+            query="分析岗位并改写简历",
+            roles=roles,
+            mode="collaborative",
+            use_judge=True,
+        )
+    )
+    client = TestClient(create_app())
+
+    response = client.get("/api/task-graphs/api-task-run")
+
+    assert response.status_code == 200
+    graph = response.json()
+    assert graph["progress"] == 0
+    resume = next(
+        task
+        for task in graph["tasks"]
+        if task["role_id"] == "resume_strategist"
+    )
+    assert resume["depends_on"] == ["job_scout"]
+    assert client.get("/api/task-graphs").json()[0]["run_id"] == (
+        "api-task-run"
+    )
 
 
 def test_agent_memory_search_endpoint_uses_persisted_run_memory(

@@ -32,6 +32,36 @@ ROLE_DAILY_LABELS = {
 }
 
 
+def build_daily_assignment_digest(target_date: str) -> str:
+    lines = [
+        f"# {target_date} 新岗位任务拆解",
+        "> AI 求职 Multi-Agent 已把日报转成可追踪任务图。"
+        "依赖关系：岗位发现 → JD/知识分析 → 简历/作品/面试 → Judge。",
+        "## 角色任务",
+    ]
+    for role_id, (display_name, assignment) in ROLE_DAILY_LABELS.items():
+        dependencies = {
+            "job_scout": "无，首先执行",
+            "jd_analyst": "依赖岗位侦察员",
+            "job_knowledge_curator": "依赖岗位侦察员",
+            "resume_strategist": "依赖 JD 与岗位知识",
+            "portfolio_coach": "依赖 JD 与岗位知识",
+            "interview_coach": "依赖 JD 与岗位知识",
+            "judge": "依赖全部工作角色",
+        }[role_id]
+        lines.append(
+            f"- **{display_name}**（`{role_id}`）：{assignment}；{dependencies}。"
+        )
+    lines.extend(
+        [
+            "",
+            "任务详情、依赖、模型和实时进度可在 Agent 小镇控制台查看；"
+            "各角色机器人会继续在本群推送自己的完整分工。",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def current_date() -> date:
     return datetime.now(ZoneInfo("Asia/Shanghai")).date()
 

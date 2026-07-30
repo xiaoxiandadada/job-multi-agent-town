@@ -9,6 +9,7 @@ from .cognition import MemoryStore
 from .model_client import ModelClient
 from .models import AgentResult, RoleSpec, RunMetrics, RunReport, RunRequest
 from .registry import RoleRegistry
+from .tasks import TaskGraphStore, build_run_task_graph
 
 
 CONTEXT_ROLE_IDS = {
@@ -18,7 +19,32 @@ CONTEXT_ROLE_IDS = {
 }
 
 
-def build_judge_input(query: str, draft: str) -> str:
+def close_unbalanced_code_fence(text: str) -> str:
+    """Prevent one model section from swallowing later Feishu Markdown."""
+
+    if text.count("```") % 2:
+        return f"{text.rstrip()}\n```"
+    return text
+
+
+def build_judge_input(
+    query: str,
+    draft: str,
+    *,
+    preserve_role_answer: bool = False,
+) -> str:
+    review_contract = (
+        "4. 这是用户直接点名一个角色的回答。不要重写或压缩角色正文；"
+        "只输出简短的“证据审核补充”，指出需要纠正、降级或补证的内容。"
+        "不得混入与当前问题无关的日报、刷题或学习任务。\n"
+        if preserve_role_answer
+        else "4. 直接重写最终答案，遵守用户的长度和格式要求。\n"
+    )
+    review_action = (
+        "请只审核以下角色结果并输出补充意见"
+        if preserve_role_answer
+        else "请审核并重写以下角色结果"
+    )
     return (
         f"用户任务：{query}\n\n"
         "审核规则：\n"
@@ -27,9 +53,37 @@ def build_judge_input(query: str, draft: str) -> str:
         "不得从框架名称推导未提供的功能。\n"
         "3. 对本项目/GitHub 的陈述必须给出仓库路径或复核命令；"
         "不受支持的内容应删除，不要用看似合理的通用项目描述补足。\n"
-        "4. 直接重写最终答案，遵守用户的长度和格式要求。\n\n"
-        f"请审核并重写以下角色结果：\n{draft}"
+        f"{review_contract}\n"
+        f"{review_action}：\n{draft}"
     )
+
+
+def merge_judged_output(
+    successful: list[AgentResult],
+    draft: str,
+    judge_result: AgentResult,
+) -> str:
+    """Keep a directly addressed specialist's answer intact.
+
+    A multi-role run needs the Judge to synthesize one answer. For a direct
+    single-role question, replacing the specialist with the Judge destroys
+    the role contract, so the audit is appended instead.
+    """
+
+    if (
+        len(successful) == 1
+        and successful[0].role_id != "judge"
+        and judge_result.status == "ok"
+    ):
+        safe_draft = close_unbalanced_code_fence(draft)
+        safe_audit = close_unbalanced_code_fence(judge_result.output)
+        return (
+            f"{safe_draft}\n\n---\n\n"
+            f"## 证据审核员补充\n\n{safe_audit}"
+        )
+    if judge_result.status == "ok":
+        return close_unbalanced_code_fence(judge_result.output)
+    return close_unbalanced_code_fence(draft)
 
 
 def workflow_stage(role: RoleSpec) -> str:
@@ -50,6 +104,7 @@ class MultiAgentOrchestrator:
         max_concurrency: int = 4,
         activity_store: ActivityStore | None = None,
         memory_store: MemoryStore | None = None,
+        task_graph_store: TaskGraphStore | None = None,
         orchestrator_name: str = "asyncio",
     ):
         self.registry = registry
@@ -57,6 +112,7 @@ class MultiAgentOrchestrator:
         self.semaphore = asyncio.Semaphore(max(1, max_concurrency))
         self.activity_store = activity_store
         self.memory_store = memory_store
+        self.task_graph_store = task_graph_store
         self.orchestrator_name = orchestrator_name
 
     def _record(self, **values) -> None:
@@ -77,6 +133,55 @@ class MultiAgentOrchestrator:
                     kind="handoff",
                     text=summary or "收到上游 Agent 的证据交接",
                 )
+
+    def create_task_graph(
+        self,
+        *,
+        run_id: str,
+        request: RunRequest,
+        selected_roles: list[RoleSpec],
+    ) -> None:
+        if self.task_graph_store is None:
+            return
+        graph = self.task_graph_store.create(
+            build_run_task_graph(
+                run_id=run_id,
+                query=request.query,
+                roles=selected_roles,
+                mode=request.mode,
+                use_judge=request.use_judge,
+            )
+        )
+        self._record(
+            run_id=run_id,
+            kind="task_graph_created",
+            status="completed",
+            phase="route",
+            mode=request.mode,
+            output=f"已拆解 {len(graph.tasks)} 个任务节点",
+            selected_role_ids=[
+                task.role_id
+                for task in graph.tasks
+                if task.role_id not in {"controller", "judge"}
+            ],
+            metrics={
+                "task_count": len(graph.tasks),
+                "dependency_count": sum(
+                    len(task.depends_on) for task in graph.tasks
+                ),
+            },
+        )
+
+    def _task_for_role(self, run_id: str, role_id: str):
+        if self.task_graph_store is None:
+            return None
+        graph = self.task_graph_store.get(run_id)
+        if graph is None:
+            return None
+        return next(
+            (task for task in graph.tasks if task.role_id == role_id),
+            None,
+        )
 
     def select_roles(self, request: RunRequest):
         roles = [
@@ -115,6 +220,28 @@ class MultiAgentOrchestrator:
     ) -> AgentResult:
         started = time.perf_counter()
         role_query = query
+        task = self._task_for_role(run_id, role.role_id) if run_id else None
+        if task is not None and self.task_graph_store is not None:
+            self.task_graph_store.update_task(
+                run_id,
+                task.task_id,
+                status="running",
+                model=self.model_client.model_for(role)
+                if hasattr(self.model_client, "model_for")
+                else None,
+            )
+            self._record(
+                run_id=run_id,
+                kind="task_started",
+                status="running",
+                phase=task.phase,
+                role_id=role.role_id,
+                display_name=role.display_name,
+                task_id=task.task_id,
+                task_title=task.title,
+                depends_on=task.depends_on,
+                progress=50,
+            )
         if self.memory_store is not None and run_id:
             memories = self.memory_store.retrieve(
                 role_id=role.role_id,
@@ -212,6 +339,37 @@ class MultiAgentOrchestrator:
                 output=result.output,
                 error=result.error,
             )
+            if task is not None and self.task_graph_store is not None:
+                task_status = (
+                    "completed" if result.status == "ok" else result.status
+                )
+                self.task_graph_store.update_task(
+                    run_id,
+                    task.task_id,
+                    status=task_status,
+                    model=result.model,
+                    output=result.output,
+                    error=result.error,
+                )
+                self._record(
+                    run_id=run_id,
+                    kind="task_completed",
+                    status=(
+                        "completed"
+                        if result.status == "ok"
+                        else result.status
+                    ),
+                    phase=task.phase,
+                    role_id=role.role_id,
+                    display_name=role.display_name,
+                    model=result.model,
+                    task_id=task.task_id,
+                    task_title=task.title,
+                    depends_on=task.depends_on,
+                    progress=100,
+                    output=result.output,
+                    error=result.error,
+                )
             if self.memory_store is not None:
                 observation_text = (
                     result.output
@@ -265,7 +423,8 @@ class MultiAgentOrchestrator:
     @staticmethod
     def _format_results(results: list[AgentResult]) -> str:
         return "\n\n".join(
-            f"## {result.display_name}\n{result.output}"
+            f"## {result.display_name}\n"
+            f"{close_unbalanced_code_fence(result.output)}"
             for result in results
             if result.status == "ok"
         )
@@ -282,6 +441,11 @@ class MultiAgentOrchestrator:
             query=request.query,
         )
         selected = self.select_roles(request)
+        self.create_task_graph(
+            run_id=run_id,
+            request=request,
+            selected_roles=selected,
+        )
         self._record(
             run_id=run_id,
             kind="route_completed",
@@ -306,32 +470,89 @@ class MultiAgentOrchestrator:
                 phase="action",
             )
         elif request.mode == "collaborative":
-            context_roles = [
-                role for role in selected if workflow_stage(role) == "context"
+            discovery_roles = [
+                role for role in selected if role.role_id == "job_scout"
+            ]
+            analysis_roles = [
+                role
+                for role in selected
+                if role.role_id != "job_scout"
+                and workflow_stage(role) == "context"
             ]
             action_roles = [
                 role for role in selected if workflow_stage(role) == "action"
             ]
-            self._record(
-                run_id=run_id,
-                kind="phase_started",
-                status="running",
-                phase="context",
-                mode=request.mode,
-                selected_role_ids=[role.role_id for role in context_roles],
-            )
-            context_results = await self._run_parallel(
-                context_roles,
-                request.query,
-                run_id=run_id,
-                phase="context",
-            )
+            discovery_results: list[AgentResult] = []
+            if discovery_roles:
+                self._record(
+                    run_id=run_id,
+                    kind="phase_started",
+                    status="running",
+                    phase="discovery",
+                    mode=request.mode,
+                    selected_role_ids=[
+                        role.role_id for role in discovery_roles
+                    ],
+                )
+                discovery_results = await self._run_parallel(
+                    discovery_roles,
+                    request.query,
+                    run_id=run_id,
+                    phase="discovery",
+                )
+            discovery_output = self._format_results(discovery_results)
+            analysis_query = request.query
+            if discovery_output:
+                analysis_query = (
+                    f"用户原始任务：{request.query}\n\n"
+                    "以下是岗位侦察员先完成的岗位与来源证据。"
+                    "请基于该证据做专业分析，不要重新猜测岗位事实：\n\n"
+                    f"{discovery_output}"
+                )
+            analysis_results: list[AgentResult] = []
+            if analysis_roles:
+                if discovery_output:
+                    self._record(
+                        run_id=run_id,
+                        kind="handoff_created",
+                        status="completed",
+                        phase="analysis",
+                        mode=request.mode,
+                        output=discovery_output,
+                        source_role_ids=[
+                            result.role_id
+                            for result in discovery_results
+                        ],
+                        target_role_ids=[
+                            role.role_id for role in analysis_roles
+                        ],
+                    )
+                self._record(
+                    run_id=run_id,
+                    kind="phase_started",
+                    status="running",
+                    phase="analysis",
+                    mode=request.mode,
+                    selected_role_ids=[
+                        role.role_id for role in analysis_roles
+                    ],
+                )
+                analysis_results = await self._run_parallel(
+                    analysis_roles,
+                    analysis_query,
+                    run_id=run_id,
+                    phase="analysis",
+                )
+            context_results = [
+                *discovery_results,
+                *analysis_results,
+            ]
             context_output = self._format_results(context_results)
             action_query = request.query
             if context_output:
                 action_query = (
                     f"用户原始任务：{request.query}\n\n"
-                    "以下是上游 Agent 已完成的岗位情报、JD 分析与知识补充。"
+                    "以下是上游 Agent 已完成的岗位发现、JD 分析与知识补充。"
                     "请基于这些证据继续工作，并指出仍待核验的内容：\n\n"
                     f"{context_output}"
                 )
@@ -393,6 +614,10 @@ class MultiAgentOrchestrator:
                 judge_input = build_judge_input(
                     request.query,
                     final_output,
+                    preserve_role_answer=(
+                        len(successful) == 1
+                        and successful[0].role_id != "judge"
+                    ),
                 )
                 self._record(
                     run_id=run_id,
@@ -410,8 +635,11 @@ class MultiAgentOrchestrator:
                 )
                 results.append(judge_result)
                 judge_calls = 1
-                if judge_result.status == "ok":
-                    final_output = judge_result.output
+                final_output = merge_judged_output(
+                    successful,
+                    final_output,
+                    judge_result,
+                )
             except KeyError:
                 pass
 

@@ -2,6 +2,8 @@
 
 日期：2026-07-23
 
+最后更新：2026-07-30
+
 ## 调研结论
 
 项目应把飞书视为 Channel，而不是 Agent Runtime：
@@ -48,7 +50,8 @@
 
 默认运行时是 LangGraph，不以 CrewAI 或 AutoGen 作为运行时：
 
-- LangGraph `StateGraph`：route/context/action/judge 的状态、边和 checkpoint。
+- LangGraph `StateGraph`：route/discovery/analysis/action/judge 的状态、边和
+  checkpoint。
 - Python `asyncio`：阶段内部并发、并发上限和超时控制。
 - Pydantic：角色、请求、结果和指标的数据契约。
 - FastAPI：网页与 HTTP API。
@@ -56,7 +59,9 @@
 - Multi-Bot Binding：每个飞书 App ID 绑定零个（总控）或一个 `role_id`；多个
   身份共享同一 Runtime、模型客户端、并发信号量和 Judge。
 - `httpx`：调用用户自己的 OpenAI-compatible API。
-- JSON `RoleRegistry`：版本化持久化角色，一键新增后立即参与路由。
+- JSON `RoleRegistry`：版本化持久化角色、直接模型覆盖和一键新增。
+- JSON `TaskGraphStore`：按 run 保存任务、依赖、验收标准、状态与进度；使用文件锁
+  支持 API、Bot 和日报进程共享同一持久卷。
 - append-only `MemoryStore`：保存每个角色的 observation、handoff、plan 与
   reflection；运行前按新近度、相关性和重要性检索。
 
@@ -75,19 +80,31 @@ START
   |
  route
   |
-  +-- 有上游角色 --> context_phase --+
-  |                                   |
-  +-- 无上游角色 ---------------------+--> action_phase
-                                      |        |
-                                      +------> judge --> END
+  +-- job_scout ----------> discovery_phase
+  |                                  |
+  |                         analysis_phase
+  |                         /            \
+  |                  jd_analyst     knowledge_curator
+  |                         \            /
+  +--------------------------> action_phase
+                             /      |       \
+                         resume  portfolio  interview
+                             \      |       /
+                                judge --> END
 ```
 
 - `route`：规则选择角色，不消耗模型。
-- `context_phase`：岗位侦察、JD、岗位知识并行。
-- `action_phase`：简历、作品、面试基于上游结果并行。
+- `discovery_phase`：岗位侦察员先核验中国 2027 届正式校招机会。
+- `analysis_phase`：JD 分析师与岗位知识补充员基于侦察结果并行。
+- `action_phase`：简历、作品、面试角色基于 discovery + analysis 结果并行。
 - `judge`：证据审核与最终排版。
-- Graph State：请求、角色 ID、两阶段结果、最终输出和是否调用 Judge。
+- Graph State：请求、分阶段角色 ID/结果、最终输出和是否调用 Judge。
 - `thread_id`：与 run ID 对齐，为 checkpoint、恢复和多轮追问预留。
+
+每个 run 同时创建独立任务 DAG。节点包含 `task_id`、`role_id`、`phase`、
+`depends_on`、验收标准、模型、输出摘要、错误和 0–100% 进度。依赖未满足时是
+`blocked`，满足后转为 `ready/running`，最终为 `completed/error/timeout`。
+RPG 页面直接读取这张任务图，不根据精灵状态猜测依赖。
 
 当前图使用 `InMemorySaver` 保存进程内 checkpoint，并把跨进程可读的
 `ActivityEvent` 追加到 `data/runtime/activity.jsonl`，网页每 1.5 秒聚合展示
@@ -105,7 +122,7 @@ LangGraph checkpoint 与角色长期记忆是两个不同层次：
 
 角色执行前，Runtime 从 `memories.jsonl` 取 top-k 记忆，score 为
 `0.38 × recency + 0.40 × relevance + 0.22 × importance`。检索结果只作为
-“可能过时、需要复核”的上下文；每次输出/失败成为 observation，context → action
+“可能过时、需要复核”的上下文；每次输出/失败成为 observation，analysis → action
 成为 handoff，累积经验形成不含隐藏推理的 reflection。这对应 Generative Agents
 论文中的 observation / planning / reflection，但语义被约束为求职任务，不模拟
 无关生活行为。
@@ -126,11 +143,12 @@ Mock 对照中，同一 5-worker + Judge 任务的最新一次结果为：`async
 ```text
 用户任务
    |
-   +--> Job Scout --------+
-   +--> JD Analyst -------+  第一阶段并行
-   +--> Knowledge Curator-+
-                           |
-                上游结果合并为带证据上下文
+   +--> Job Scout                  发现与核验
+            |
+            +--> JD Analyst -------+
+            +--> Knowledge Curator-+  分析阶段并行
+                                    |
+                         上游结果合并为带证据上下文
                            |
    +--> Resume Strategist-+
    +--> Portfolio Coach --+  第二阶段并行
@@ -141,13 +159,42 @@ Mock 对照中，同一 5-worker + Judge 任务的最新一次结果为：`async
                    最终回复 + Run Metrics
 ```
 
-命令预设只选择所需角色。例如 `/job` 只执行第一阶段三个角色，`/apply` 先执行
+命令预设只选择所需角色。例如 `/job` 只执行 discovery/analysis 三个角色，`/apply` 先执行
 JD 与岗位知识，再把结果交给简历和作品角色；`/team` 才运行六个工作角色。这样能
 避免无关 Agent 消耗延迟和额度。
 
-角色配置中的 `tools` 当前只是能力元数据，尚未自动执行联网搜索或本地文档检索。
-需要真实工具调用时，应新增受控 Tool Executor，并把来源证据返回给 Judge，不能
-仅凭 `tools: ["web_search"]` 认为已经联网核验。
+直接 `@` 某个角色或使用 `/ask <role_id>` 时仍可调用 Judge，但最终输出契约不同：
+专家完整正文放在前面，Judge 只追加证据纠错，不允许覆盖或压缩专家回答，也不得混入
+与当前问题无关的日报内容。消息合并时会自动闭合未成对的 Markdown 代码围栏。
+
+角色配置中的 `tools` 当前仍是能力元数据；本地证据由 `RoleContextProvider` 按角色
+从当天日报、岗位表、学习计划、简历/作品材料中选取并注入。模型本身没有通用联网
+工具调用权限；需要实时联网核验时仍应接入受控 Tool Executor，并把来源证据返回给
+Judge，不能仅凭 `tools: ["web_search"]` 认为已经联网核验。
+
+## 分角色模型解析
+
+每个角色独立解析最终模型，优先级为：
+
+```text
+RoleSpec.model
+  > JOB_AGENT_ROLE_MODEL_<ROLE_ID>
+  > RoleSpec.model_profile 对应的 profile 模型
+```
+
+API `GET /api/models` 返回 profile、角色 override 与最终解析模型；角色卡片通过
+`PATCH /api/roles/{role_id}` 写入直接 override。API Key 只由环境变量注入，
+`/api/models`、任务图和 ActivityEvent 都不会返回密钥。
+
+当前生产分层是：
+
+- 岗位侦察、JD、简历、作品、面试、Judge：
+  `Qwen/Qwen2.5-32B-Instruct`；
+- 岗位知识补充员：`Qwen/Qwen3.5-397B-A17B`；
+- 角色知识 prompt 约束为能力地图、定义/直觉、架构、技术选型、生产故障、评测、
+  面试问题、30/60/120 分钟学习路径和 GitHub 作品证据。
+
+模型 A/B 只决定当前角色分层，不应被解释为对所有任务的绝对排名。
 
 ## 飞书身份与逻辑角色
 
@@ -211,10 +258,9 @@ Feishu App: 简历策略师          -> resume_strategist
    不复制整段历史。
 4. **并发上限**：用 semaphore 限制并发，避免 API 限流和尾延迟爆炸。
 5. **超时与降级**：角色超时不阻塞整体；Judge 可基于已完成结果生成部分报告。
-6. **模型分层**：普通工作角色使用 worker 模型；岗位知识角色使用独立 knowledge
-   profile（未配置时复用 judge 模型），证据链关键角色使用 `reliable` profile，
-   综合判断使用 judge 模型。这样可以把 reasoning 尾延迟高的角色路由到更稳定的
-   指令模型，而不拖慢其他角色。
+6. **模型分层**：普通工作角色使用低延迟 reliable 模型；岗位知识角色通过
+   role-specific override 使用更强模型；Judge 使用独立 profile。只有知识节点承担
+   更强模型成本，不拖慢 discovery 和 action 的其他并行节点。
 7. **缓存**：按规范化 JD hash 缓存解析；相同简历/JD 组合复用证据抽取。
 8. **结构化输出**：Pydantic/JSON Schema 降低重试和解析失败。
 9. **可观测性**：每个 run 记录 wall latency、agent latency、token、错误、重试和

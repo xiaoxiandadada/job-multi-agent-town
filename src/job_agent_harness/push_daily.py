@@ -10,6 +10,7 @@ import uuid
 from lark_oapi.channel import FeishuChannel
 
 from .daily_brief import (
+    build_daily_assignment_digest,
     current_date,
     load_chat_id,
     load_daily_messages,
@@ -20,9 +21,11 @@ from .runtime import (
     build_activity_store,
     build_memory_store,
     build_registry,
+    build_task_graph_store,
     prepare_directory,
     runtime_data_dir,
 )
+from .tasks import build_daily_task_graph
 
 
 def build_delivery_plan(
@@ -67,7 +70,7 @@ async def push_daily(
     target_date: str | None,
     full: bool,
     requested_role: str | None = None,
-    include_controller: bool = False,
+    include_controller: bool = True,
 ) -> None:
     started = time.perf_counter()
     run_id = f"daily-{uuid.uuid4()}"
@@ -87,7 +90,12 @@ async def push_daily(
         resolved_date,
         max_chars=max_chars,
     )
-    bindings = load_bot_bindings(build_registry())
+    fallback_messages = [
+        *fallback_messages,
+        build_daily_assignment_digest(resolved_date),
+    ]
+    registry = build_registry()
+    bindings = load_bot_bindings(registry)
     plan = build_delivery_plan(
         bindings,
         role_messages=role_messages,
@@ -97,11 +105,31 @@ async def push_daily(
     )
     activity_store = build_activity_store()
     memory_store = build_memory_store()
+    task_graph_store = build_task_graph_store()
     selected_role_ids = [
         binding.role_id
         for binding, _ in plan
         if binding.role_id is not None
     ]
+    graph_roles = [
+        registry.get(role_id)
+        for role_id in selected_role_ids
+    ]
+    task_graph = task_graph_store.create(
+        build_daily_task_graph(
+            run_id=run_id,
+            target_date=resolved_date,
+            controller_description=fallback_messages[0],
+            role_descriptions={
+                role_id: messages[0]
+                for role_id, messages in role_messages.items()
+            },
+            roles=graph_roles,
+            include_controller=any(
+                binding.role_id is None for binding, _ in plan
+            ),
+        )
+    )
     activity_store.record(
         run_id=run_id,
         kind="run_started",
@@ -110,6 +138,22 @@ async def push_daily(
         phase="route",
         mode="daily",
         query=f"推送 {resolved_date} 求职日报",
+    )
+    activity_store.record(
+        run_id=run_id,
+        kind="task_graph_created",
+        status="completed",
+        orchestrator="daily-push",
+        phase="route",
+        mode="daily",
+        output=f"总控已把新岗位拆成 {len(task_graph.tasks)} 个推送任务",
+        selected_role_ids=selected_role_ids,
+        metrics={
+            "task_count": len(task_graph.tasks),
+            "dependency_count": sum(
+                len(task.depends_on) for task in task_graph.tasks
+            ),
+        },
     )
     activity_store.record(
         run_id=run_id,
@@ -140,18 +184,43 @@ async def push_daily(
     try:
         for binding, messages in plan:
             active_binding = binding
-            if binding.role_id is not None:
-                activity_store.record(
-                    run_id=run_id,
-                    kind="daily_push_started",
-                    status="running",
-                    orchestrator="daily-push",
-                    phase="action",
-                    mode="daily",
-                    role_id=binding.role_id,
-                    display_name=binding.display_name,
-                    query=f"推送 {resolved_date} 角色日报",
-                )
+            task_id = binding.role_id or "controller_daily"
+            task = next(
+                item
+                for item in task_graph_store.get(run_id).tasks
+                if item.task_id == task_id
+            )
+            task_graph_store.update_task(
+                run_id,
+                task_id,
+                status="running",
+            )
+            activity_store.record(
+                run_id=run_id,
+                kind="task_started",
+                status="running",
+                orchestrator="daily-push",
+                phase="delivery",
+                mode="daily",
+                role_id=binding.role_id or "controller",
+                display_name=binding.display_name,
+                task_id=task.task_id,
+                task_title=task.title,
+                depends_on=task.depends_on,
+                progress=50,
+                query=f"推送 {resolved_date} 日报任务",
+            )
+            activity_store.record(
+                run_id=run_id,
+                kind="daily_push_started",
+                status="running",
+                orchestrator="daily-push",
+                phase="delivery",
+                mode="daily",
+                role_id=binding.role_id or "controller",
+                display_name=binding.display_name,
+                query=f"推送 {resolved_date} 角色日报",
+            )
             channel = FeishuChannel(
                 app_id=binding.app_id,
                 app_secret=binding.app_secret,
@@ -163,21 +232,42 @@ async def push_daily(
                         f"{binding.display_name} 飞书推送失败：{result.error}"
                     )
                 pushed_messages += 1
+            summary = (
+                f"已推送 {resolved_date} 日报，共 {len(messages)} 条消息"
+            )
+            task_graph_store.update_task(
+                run_id,
+                task_id,
+                status="completed",
+                output=summary,
+            )
+            activity_store.record(
+                run_id=run_id,
+                kind="task_completed",
+                status="completed",
+                orchestrator="daily-push",
+                phase="delivery",
+                mode="daily",
+                role_id=binding.role_id or "controller",
+                display_name=binding.display_name,
+                task_id=task.task_id,
+                task_title=task.title,
+                depends_on=task.depends_on,
+                progress=100,
+                output=summary,
+            )
+            activity_store.record(
+                run_id=run_id,
+                kind="daily_push_completed",
+                status="ok",
+                orchestrator="daily-push",
+                phase="delivery",
+                mode="daily",
+                role_id=binding.role_id or "controller",
+                display_name=binding.display_name,
+                output=summary,
+            )
             if binding.role_id is not None:
-                summary = (
-                    f"已推送 {resolved_date} 日报，共 {len(messages)} 条消息"
-                )
-                activity_store.record(
-                    run_id=run_id,
-                    kind="daily_push_completed",
-                    status="ok",
-                    orchestrator="daily-push",
-                    phase="action",
-                    mode="daily",
-                    role_id=binding.role_id,
-                    display_name=binding.display_name,
-                    output=summary,
-                )
                 memory_store.append(
                     role_id=binding.role_id,
                     run_id=run_id,
@@ -186,7 +276,16 @@ async def push_daily(
                 )
             active_binding = None
     except Exception as exc:
-        if active_binding is not None and active_binding.role_id is not None:
+        if active_binding is not None:
+            failed_task_id = (
+                active_binding.role_id or "controller_daily"
+            )
+            task_graph_store.update_task(
+                run_id,
+                failed_task_id,
+                status="error",
+                error=str(exc),
+            )
             activity_store.record(
                 run_id=run_id,
                 kind="daily_push_completed",
@@ -194,7 +293,7 @@ async def push_daily(
                 orchestrator="daily-push",
                 phase="action",
                 mode="daily",
-                role_id=active_binding.role_id,
+                role_id=active_binding.role_id or "controller",
                 display_name=active_binding.display_name,
                 error=str(exc),
             )
@@ -249,7 +348,12 @@ def main() -> None:
     parser.add_argument(
         "--controller",
         action="store_true",
-        help="在角色分工推送之外，再由总控发送一份综合摘要",
+        help="兼容参数；总控现在默认发送综合日报",
+    )
+    parser.add_argument(
+        "--roles-only",
+        action="store_true",
+        help="只发送角色分工消息，不发送总控综合日报",
     )
     args = parser.parse_args()
     asyncio.run(
@@ -257,7 +361,7 @@ def main() -> None:
             args.target_date,
             args.full,
             args.requested_role,
-            args.controller,
+            not args.roles_only,
         )
     )
 

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from .activity import ActivityEvent
 from .cognition import AgentMemory, MemoryStore
 from .registry import RoleRegistry
+from .tasks import TaskGraph, TaskNode
 
 
 TOWN_PLACES = {
@@ -76,6 +77,12 @@ class TownAgentSnapshot(BaseModel):
     memories: list[TownMemory] = Field(default_factory=list)
     memory_stream: list[TownCognitiveMemory] = Field(default_factory=list)
     reflection: str = ""
+    task_id: str | None = None
+    task_title: str = ""
+    task_status: str = ""
+    task_progress: int = 0
+    depends_on: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
 
 
 class TownHandoff(BaseModel):
@@ -101,6 +108,7 @@ class TownSnapshot(BaseModel):
     handoffs: list[TownHandoff] = Field(default_factory=list)
     timeline: list[TownMemory] = Field(default_factory=list)
     replay: TownReplayState = Field(default_factory=TownReplayState)
+    task_graph: TaskGraph | None = None
 
 
 def _event_text(event: ActivityEvent) -> str:
@@ -121,6 +129,16 @@ def _event_text(event: ActivityEvent) -> str:
         return event.output_excerpt or "更新本轮计划"
     if event.kind == "reflection_created":
         return event.output_excerpt or "形成阶段反思"
+    if event.kind == "task_graph_created":
+        return event.output_excerpt or "总控完成任务拆解"
+    if event.kind == "task_started":
+        return f"开始任务：{event.task_title or event.task_id}"
+    if event.kind == "task_completed":
+        return (
+            event.output_excerpt
+            or event.error
+            or f"完成任务：{event.task_title or event.task_id}"
+        )
     if event.kind == "daily_push_started":
         return f"{event.display_name or event.role_id} 开始推送日报"
     if event.kind == "daily_push_completed":
@@ -164,6 +182,78 @@ def _cognitive_memory(memory: AgentMemory) -> TownCognitiveMemory:
     )
 
 
+def task_graph_for_events(
+    graph: TaskGraph | None,
+    events: list[ActivityEvent],
+    *,
+    replay: bool,
+) -> TaskGraph | None:
+    if graph is None or not replay:
+        return graph
+    projected = graph.model_copy(deep=True)
+    by_task = {task.task_id: task for task in projected.tasks}
+    for task in projected.tasks:
+        task.status = "blocked" if task.depends_on else "ready"
+        task.progress = 0
+        task.model = "pending"
+        task.output_excerpt = ""
+        task.error = None
+        task.started_at = None
+        task.completed_at = None
+    for event in events:
+        if not event.task_id or event.task_id not in by_task:
+            continue
+        task = by_task[event.task_id]
+        if event.kind == "task_started":
+            task.status = "running"
+            task.progress = event.progress or 50
+            task.model = event.model or task.model
+            task.started_at = event.timestamp
+        elif event.kind == "task_completed":
+            task.status = (
+                "completed"
+                if event.status in {"ok", "completed"}
+                else event.status
+            )
+            task.progress = 100
+            task.model = event.model or task.model
+            task.output_excerpt = event.output_excerpt
+            task.error = event.error
+            task.completed_at = event.timestamp
+        for candidate in projected.tasks:
+            if candidate.status not in {"blocked", "ready"}:
+                continue
+            dependencies = [
+                by_task[item]
+                for item in candidate.depends_on
+                if item in by_task
+            ]
+            candidate.status = (
+                "ready"
+                if not dependencies
+                or all(item.status == "completed" for item in dependencies)
+                else "blocked"
+            )
+    projected.progress = (
+        round(
+            sum(task.progress for task in projected.tasks)
+            / len(projected.tasks)
+        )
+        if projected.tasks
+        else 100
+    )
+    statuses = {task.status for task in projected.tasks}
+    if not projected.tasks or statuses == {"completed"}:
+        projected.status = "completed"
+    elif statuses & {"error", "timeout"}:
+        projected.status = "partial"
+    elif statuses & {"running", "completed"}:
+        projected.status = "running"
+    else:
+        projected.status = "queued"
+    return projected
+
+
 def build_town_snapshot(
     registry: RoleRegistry,
     events: list[ActivityEvent],
@@ -173,9 +263,23 @@ def build_town_snapshot(
     timeline_limit: int = 18,
     replay_step: int | None = None,
     replay_total_steps: int | None = None,
+    task_graph: TaskGraph | None = None,
 ) -> TownSnapshot:
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
     replay_enabled = replay_total_steps is not None
+    visible_task_graph = task_graph_for_events(
+        task_graph,
+        events,
+        replay=replay_enabled,
+    )
+    tasks_by_role: dict[str, TaskNode] = (
+        {
+            task.role_id: task
+            for task in visible_task_graph.tasks
+        }
+        if visible_task_graph is not None
+        else {}
+    )
     display_time = now
     if replay_enabled and events:
         display_time = datetime.fromisoformat(
@@ -211,6 +315,7 @@ def build_town_snapshot(
 
     agents: list[TownAgentSnapshot] = []
     for role in registry.list_roles(include_disabled=True):
+        task = tasks_by_role.get(role.role_id)
         role_events = [
             event
             for event in current_events
@@ -230,14 +335,31 @@ def build_town_snapshot(
             model = "—"
             latency_ms = None
         elif last is None:
-            status = "queued" if role.role_id in selected_ids else "idle"
+            status = (
+                "queued"
+                if role.role_id in selected_ids
+                or (
+                    task is not None
+                    and task.status in {"blocked", "ready"}
+                )
+                else "idle"
+            )
             current_action = (
-                "在 LangGraph Plaza 等待调度"
+                (
+                    f"等待依赖：{'、'.join(task.depends_on)}"
+                    if task is not None
+                    and task.status == "blocked"
+                    else task.description
+                    if task is not None
+                    else "在 LangGraph Plaza 等待调度"
+                )
                 if status == "queued"
                 else "在自己的建筑待命"
             )
-            phase = "route" if status == "queued" else "idle"
-            model = "—"
+            phase = task.phase if task is not None else (
+                "route" if status == "queued" else "idle"
+            )
+            model = task.model if task is not None else "—"
             latency_ms = None
         else:
             status = (
@@ -309,6 +431,14 @@ def build_town_snapshot(
                     for memory in cognitive_memories
                 ],
                 reflection=latest_reflection,
+                task_id=task.task_id if task is not None else None,
+                task_title=task.title if task is not None else "",
+                task_status=task.status if task is not None else "",
+                task_progress=task.progress if task is not None else 0,
+                depends_on=task.depends_on if task is not None else [],
+                acceptance_criteria=(
+                    task.acceptance_criteria if task is not None else []
+                ),
             )
         )
 
@@ -340,4 +470,5 @@ def build_town_snapshot(
             step=replay_step or 0,
             total_steps=replay_total_steps or 0,
         ),
+        task_graph=visible_task_graph,
     )

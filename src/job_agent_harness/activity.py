@@ -19,6 +19,9 @@ ActivityKind = Literal[
     "memory_retrieved",
     "plan_updated",
     "reflection_created",
+    "task_graph_created",
+    "task_started",
+    "task_completed",
     "daily_push_started",
     "daily_push_completed",
     "agent_started",
@@ -57,6 +60,10 @@ class ActivityEvent(BaseModel):
     selected_role_ids: list[str] = Field(default_factory=list)
     source_role_ids: list[str] = Field(default_factory=list)
     target_role_ids: list[str] = Field(default_factory=list)
+    task_id: str | None = None
+    task_title: str | None = None
+    depends_on: list[str] = Field(default_factory=list)
+    progress: int | None = Field(default=None, ge=0, le=100)
     metrics: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -115,6 +122,10 @@ class ActivityStore:
         selected_role_ids: list[str] | None = None,
         source_role_ids: list[str] | None = None,
         target_role_ids: list[str] | None = None,
+        task_id: str | None = None,
+        task_title: str | None = None,
+        depends_on: list[str] | None = None,
+        progress: int | None = None,
         metrics: dict[str, Any] | None = None,
     ) -> ActivityEvent:
         return self.emit(
@@ -135,6 +146,10 @@ class ActivityStore:
                 selected_role_ids=selected_role_ids or [],
                 source_role_ids=source_role_ids or [],
                 target_role_ids=target_role_ids or [],
+                task_id=task_id,
+                task_title=task_title,
+                depends_on=depends_on or [],
+                progress=progress,
                 metrics=metrics or {},
             )
         )

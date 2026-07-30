@@ -14,20 +14,22 @@
 
 - 角色注册表：通过网页/API 一键添加角色，无需改代码或重启服务。
 - 动态路由：只选择与当前任务相关的角色，避免所有 Agent 每次都运行。
-- 分阶段协作：岗位情报、JD 和岗位知识先并行，简历、作品与面试 Agent 再基于
-  上游证据并行执行。
+- 分阶段协作：岗位侦察先核验机会，JD 与岗位知识再并行分析；简历、作品与面试
+  Agent 等依赖满足后并行执行。
 - 审核闭环：Judge 汇总结果并保留角色输出、耗时和 token 证据。
-- 模型可替换：同一套角色可切换不同模型，支持单 Agent、多 Agent和模型 A/B。
+- 分角色模型：每个角色可通过环境变量或网页/API 单独覆盖模型；岗位知识补充员可用
+  更强模型，其他角色保留低延迟模型，支持单 Agent、多 Agent 和模型 A/B。
 - 飞书接入：使用飞书官方 Python SDK 的长连接模式，不要求飞书 AI。
 - 飞书富文本：模型结果、角色列表和日报用 Feishu Post/Markdown 展示，支持标题、
   列表、代码和可点击 JD 链接。
 - 独立角色机器人：一个后端可同时连接多个飞书应用，让群成员分别
   `@岗位侦察员`、`@简历策略师` 或 `@作品教练`。
-- 日报直达：`/daily` 直接读取并推送结构化日报；自动化可调用独立推送命令。
+- 日报直达与拆解：总控先发送结构化求职总报和新增岗位工作流，再由七个角色分别
+  推送岗位、JD、学习、简历、作品、面试和证据审核内容。
 - 双编排器：默认使用 LangGraph 状态图；保留轻量 `asyncio` Harness 作为性能
   baseline 和故障降级。
-- 实时控制台：展示 route/context/action/judge 阶段、每个 Agent 的模型、状态、
-  延迟、输出摘要与最近运行。
+- 实时控制台：展示 route/discovery/analysis/action/judge、每个 Agent 的模型、
+  任务详情、依赖、验收条件、进度、延迟、输出摘要与最近运行。
 - RPG 求职小镇：7 个角色拥有独立建筑和精灵，沿 LangGraph 阶段道路移动；不是
   预录动画，位置、气泡、状态、日程、记忆流、证据交接和延迟均来自
   `ActivityEvent`。
@@ -49,9 +51,9 @@ Channel Adapter
         |
 Deterministic Router
         |
-Role Registry -> Context Workers -> Action Workers -> Judge -> Run Report
-        |                 \________ user model API _______/       |
-   role config                                             eval metrics
+Role Registry -> Job Scout -> JD + Knowledge -> Resume + Portfolio + Interview
+        |              \________ user model API _________/              |
+   role/model config                                      Judge -> Run Report
 ```
 
 详细设计与开源调研见
@@ -66,6 +68,8 @@ RPG 小镇的状态映射和演示方式见
 [`docs/performance-report.md`](docs/performance-report.md)。
 2026-07-28 的 8 Bot、分角色日报、真实 `@作品教练` 与 RPG 回放验收见
 [`docs/acceptance-2026-07-28.md`](docs/acceptance-2026-07-28.md)。
+2026-07-30 的任务依赖图、角色模型、总控日报和真实 `@岗位知识补充员` 验收见
+[`docs/acceptance-2026-07-30.md`](docs/acceptance-2026-07-30.md)。
 
 ## 本地启动
 
@@ -111,6 +115,9 @@ uv run job-agent-feishu
 普通消息会按关键词自动选择角色并行执行；`/agent <role_id> <任务>` 可显式指定
 一个角色，`/ask` 是更直观的同义命令。`/job`、`/apply`、`/interview` 和 `/team`
 使用分阶段协作模式。
+直接点名一个角色时，系统保留该专家的完整回答，再追加 Judge 的证据审核；Judge
+不会再用短摘要替换角色正文。消息合并层会自动闭合未成对的 Markdown 代码围栏，
+避免飞书中的后续标题被吞进代码块。
 网页端的“添加并立即启用”表单和 `/role-add` 共用同一个角色注册表。
 新增角色不只是一个名称：`workflow_stage=context` 会在上游证据阶段运行，
 `workflow_stage=action` 会接收 context Agent 的证据交接；角色的建筑、图标、
@@ -148,8 +155,10 @@ LARK_ROLE_RESUME_STRATEGIST_APP_SECRET=...
 直接进入该机器人绑定的 role，再由 Judge 复核。总控机器人继续负责自动路由和
 `/team` 等团队命令。
 
-生产默认由 LangGraph 编排：`route → context → action → judge`；每个阶段内部使用
-有并发上限的 `asyncio` fan-out。Pydantic 定义输入输出，FastAPI 提供 API/UI，
+生产默认由 LangGraph 编排：
+`route → discovery → analysis → action → judge`；岗位侦察先执行，JD/知识与
+简历/作品/面试分别在两个并行层中运行。Pydantic 定义输入输出和任务 DAG，
+FastAPI 提供 API/UI，
 飞书官方 `lark-oapi` SDK 提供长连接，`httpx` 调用 OpenAI-compatible 模型 API。
 要做公平性能对照时可切回 baseline：
 
@@ -166,8 +175,33 @@ uv run job-agent-push-daily --role portfolio_coach
 uv run job-agent-push-daily --controller
 ```
 
-默认行为是：只要已配置 `JOB_AGENT_FEISHU_ROLE_BOTS`，每个角色机器人就向同一会话
-发送它负责的日报部分；如果还没有独立角色机器人，则自动退回总控综合摘要。
+默认行为是：总控先发送综合日报与任务拆解，再由已配置的每个角色机器人向同一会话
+发送它负责的日报部分；如果还没有独立角色机器人，则退回总控综合摘要。使用
+`--roles-only` 可只发送角色分工消息。
+
+每个角色的模型解析顺序是：
+
+```text
+网页/API 的 RoleSpec.model
+  > JOB_AGENT_ROLE_MODEL_<ROLE_ID>
+  > model_profile 对应的默认模型
+```
+
+例如仅给岗位知识补充员配置更强模型：
+
+```dotenv
+JOB_AGENT_ROLE_MODEL_JOB_KNOWLEDGE_CURATOR=Qwen/Qwen3.5-397B-A17B
+```
+
+网页的每张角色卡可以直接修改该角色模型。相同能力也可通过 API 使用：
+
+```bash
+curl http://127.0.0.1:8000/api/models
+curl -X PATCH http://127.0.0.1:8000/api/roles/job_knowledge_curator \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen/Qwen3.5-397B-A17B","timeout_seconds":120}'
+curl http://127.0.0.1:8000/api/task-graphs
+```
 
 ## GitHub 展示与线上运行
 

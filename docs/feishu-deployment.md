@@ -36,6 +36,8 @@ uv run job-agent-feishu
 ```
 
 飞书结果使用 Post/Markdown 富文本，不再把 `##`、列表和链接作为普通文本显示。
+直接 `@` 一个角色时，专家完整正文先展示，Judge 只追加证据审核；消息合并层会自动
+闭合未成对的代码围栏，避免长回答中的后续标题进入代码块。
 `/daily` 会从 `JOB_AGENT_PREPARE_DIR` 读取当天日报，删除本地绝对路径后直接展示
 岗位、具体学习内容、创意、作品进展和三件优先事项。
 
@@ -65,6 +67,16 @@ docker compose --profile api up --build -d
 变量，不要上传 `.env`。`/data` 用于保存动态角色注册表，部署平台应为它挂载持久卷。
 `JOB_AGENT_FEISHU_MAX_CHARS` 控制飞书最终消息的长度保护；角色 timeout 覆盖等待
 并发槽位和模型请求的完整生命周期，避免多条团队命令同时进入后无限排队。
+
+这里建议保留两个容器服务，而不是为七个角色启动七套后端：
+
+- `bot`：一个 supervisor 托管总控和七个角色的八条 WebSocket；
+- `api`：LangGraph、角色/模型配置、任务图和 RPG 页面；
+- 共享 `/data`：角色注册表、ActivityEvent、Memory Stream 和任务图；
+- `.env`：只作为容器 Secret 输入，不进入镜像和 Git。
+
+Docker 不是 LangGraph 的一部分，也不会加速模型；它解决环境一致、常驻重启、密钥
+注入、持久卷和从本地迁移到云服务器的问题。
 
 长连接需要常驻进程，适合云服务器或支持常驻容器的 PaaS。GitHub Pages 只能展示
 静态说明和演示，不能保持飞书 WebSocket；GitHub 仓库可以保存源码、测试、
@@ -103,7 +115,7 @@ benchmark 和演示 GIF，再由容器平台拉取仓库部署。
 | `/job <任务>` | 岗位侦察、JD 分析、岗位知识 | 4（含 Judge） |
 | `/apply <任务>` | JD/知识 → 简历/作品 | 5（含 Judge） |
 | `/interview <任务>` | JD/知识 → 面试 | 4（含 Judge） |
-| `/team <任务>` | 六个工作角色分两阶段协作 | 7（含 Judge） |
+| `/team <任务>` | 六个工作角色按依赖分阶段协作 | 7（含 Judge） |
 | `/ask <role_id> <问题>` | 指定一个角色 | 2（含 Judge） |
 | `/agent <role_id> <任务>` | 指定一个角色 | 2（含 Judge） |
 | `/role-add <JSON>` | 0 | 0 |
@@ -111,7 +123,8 @@ benchmark 和演示 GIF，再由容器平台拉取仓库部署。
 普通消息按触发词自动路由；匹配到的工作角色并行执行后交给 Judge 汇总。以上调用数
 按全部成功且启用 Judge 计算；某个角色超时或未匹配时以 Run Report 为准。
 已绑定独立飞书身份的角色不需要 `/ask`：单聊直接提问，群聊使用
-`@角色机器人 <问题>`。其普通消息会绕过自动路由，固定进入绑定 role。
+`@角色机器人 <问题>`。其普通消息会绕过自动路由，固定进入绑定 role；角色正文
+保留，Judge 以附录形式核验。
 
 `/group-create` 只发送给总控机器人。除上面的三项消息权限外，总控还需要
 `im:chat:create` 与 `im:chat.members:write_only`；七个角色应用不需要这两项。
@@ -133,6 +146,16 @@ benchmark 和演示 GIF，再由容器平台拉取仓库部署。
 reasoning 尾延迟若明显偏高，可单独设置 `JOB_AGENT_KNOWLEDGE_MODEL`；未设置时
 自动复用 `JOB_AGENT_JUDGE_MODEL`，不会影响其他工作角色的模型选择。
 
+还可对任意角色做更高优先级的直接覆盖：
+
+```dotenv
+JOB_AGENT_ROLE_MODEL_JOB_KNOWLEDGE_CURATOR=Qwen/Qwen3.5-397B-A17B
+```
+
+解析顺序为 `RoleSpec.model > JOB_AGENT_ROLE_MODEL_<ROLE_ID> > model_profile`。
+网页角色卡和 `PATCH /api/roles/{role_id}` 可以修改 `RoleSpec.model`，无需更改
+其他角色。`GET /api/models` 只返回模型名称与解析结果，不返回 API Key。
+
 `benchmarks/run_mock_benchmark.py` 可先验证并行收益，再用真实模型跑小规模样本，
 避免把网络波动误当作架构收益。
 
@@ -149,6 +172,16 @@ Bot 会使用最近一次收到消息的 `chat_id`，以机器人身份把日报
 uv run job-agent-push-daily --full
 ```
 
+默认分发顺序是：
+
+1. 总控发送综合日报；
+2. 总控发送新增岗位的角色任务拆解；
+3. 七个角色分别发送自己的日报内容；
+4. 任务图记录总控根节点、角色节点与 Judge 终审依赖。
+
+因此完整配置下通常是 9 条飞书消息、8 个任务节点。若只要角色消息，使用
+`--roles-only`。
+
 LangGraph 对照运行：
 
 ```bash
@@ -160,6 +193,11 @@ uv run python benchmarks/compare_harness_langgraph.py
 2026-07-26 的飞书端到端验收使用“岗位准备 + 作品动作”跨领域任务，触发两个工作
 角色和一个 Judge，共 3 次模型调用；飞书收到完整回复，wall latency 为
 71.3 秒。该数值只证明链路可用，不代表稳定性能基线。
+
+2026-07-30 的完整验收见
+[`acceptance-2026-07-30.md`](acceptance-2026-07-30.md)：日报向 Agent 小镇群发送
+9 条消息，八个任务节点 100%；真实 `@岗位知识补充员` 使用 397B 专家模型并由 32B
+Judge 追加审核。
 
 ## 6. 发布前检查
 

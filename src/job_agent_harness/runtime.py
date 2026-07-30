@@ -10,6 +10,7 @@ from .cognition import MemoryStore
 from .model_client import OpenAICompatibleClient
 from .orchestrator import MultiAgentOrchestrator
 from .registry import RoleRegistry
+from .tasks import TaskGraphStore
 
 
 ROOT = Path(
@@ -52,6 +53,10 @@ def build_memory_store() -> MemoryStore:
     )
 
 
+def build_task_graph_store() -> TaskGraphStore:
+    return TaskGraphStore(runtime_data_dir() / "task_graphs")
+
+
 def build_orchestrator(
     registry: RoleRegistry | None = None,
     memory_store: MemoryStore | None = None,
@@ -62,6 +67,7 @@ def build_orchestrator(
         max_concurrency=int(os.getenv("JOB_AGENT_MAX_CONCURRENCY", "4")),
         activity_store=build_activity_store(),
         memory_store=memory_store or build_memory_store(),
+        task_graph_store=build_task_graph_store(),
     )
     orchestrator_kind = os.getenv(
         "JOB_AGENT_ORCHESTRATOR",
