@@ -6,10 +6,88 @@
 （Knowledge Curator 用 Claude 5），也保留一条 OpenAI-compatible 的自建端点旁路。
 项目不会调用飞书 AI。
 
-![真实 ActivityEvent 驱动的 Agent 小镇回放](docs/assets/agent-town-replay.jpg)
+![真实 ActivityEvent 驱动的 Agent 小镇](docs/screenshots/01-town.png)
 
-上图是一次真实 `portfolio_coach` 运行的第 5/7 个事件时间步：页面显示 ACTION
-阶段、Agent 工作状态与当时延迟。回放来自持久化事件，不是预录或伪造动画。
+上图是真实运行 `7cb6df54` 的终态，不是设计稿也不是预录动画：7 个角色全部完成、
+端到端 708.2s、7 次模型调用、并行加速比 1.35×。橙色连线是 `handoff_created`
+事件里真实的证据交接方向，右侧是 Judge 本轮的实际审核结论。
+
+**页面拿不出对应 `ActivityEvent` 的连线，页面就不画。** 这条规则贯穿整个前端，
+也是这个项目和「跑起来很好看的 Agent Demo」之间的区别。
+
+## 亮点
+
+1. **可审计的运行轨迹，而不是动画**。每个角色状态、每条依赖、每次交接都由持久化的
+   `ActivityEvent` 和任务图驱动。可以选任意历史 run 按事件时间步回放到那一刻的状态，
+   页面不显示未来事件。
+2. **Judge 真的会推翻上游结论**。上图那次运行里，Job Scout 判定岗位 J101017
+   「学历待核验」，Knowledge Curator 独立重抓官方页面后**修正为「本科可投」**，Judge
+   核实该修正有逐字引用依据后采信，并把这个上游冲突写进交付报告。多 Agent 的价值在
+   这里是可复现的，不需要靠人相信。
+3. **检索质量有可回归的量化基线**。定位出三个根因——对称归一化让检索分数与信息量反
+   相关、40% 语料是模板化记账、近重复反思霸占全部检索槽位——修复后真实语料 12 个案例
+   `k=4`：`hit@4` 0.000 → **1.000**，`precision@4` 0.000 → **0.854**，
+   `boilerplate@4` 1.000 → **0.000**。基线可重跑，不靠「看起来还行」。
+4. **读取路径不随运行时长退化**。`ActivityStore.read` 从文件尾反向按块读取，
+   `MemoryStore.list_by_role` 把七次全文件解析合并成一次；
+   `GET /api/town` 58 ms → **19.9 ms**。
+5. **角色是数据，不是硬编码的图节点**。网页或 API 一键新增角色，`workflow_stage`
+   决定它在 DAG 里的位置，不改代码也不重启。
+6. **分角色模型分层**。Knowledge Curator 跑 `claude-opus-5`，其余角色跑
+   `claude-sonnet-5`；任务图截图里能直接看到每个节点用的哪个模型，网页可热改做 A/B。
+7. **失败被记录而不是被藏起来**。超时、`Connection error.`、连续失败次数都进事件流并在
+   页面上显示；单个角色失败不阻塞整体，Judge 可基于已完成结果生成部分报告。
+8. **零构建前端**。`web/` 是静态文件，由 FastAPI 直接挂载，没有 npm/Vite/TypeScript
+   步骤，启动命令只有 `uv run job-agent-api`。
+9. **255 个单元测试**，全部使用 Mock Model，不消耗模型额度。
+
+## 界面
+
+六个页面都记在 URL hash 里，`#patrol` 这样的链接可以直接发给别人。
+
+### 任务拆解、依赖与进度
+
+![LangGraph 任务依赖图](docs/screenshots/02-task-graph.png)
+
+每个节点来自真实运行的任务图：`DEPENDS ←` 是实际依赖，中间三条是该角色的验收条件，
+底部是真实使用的模型与进度。`job_knowledge_curator` 用 `claude-opus-5`、其余用
+`claude-sonnet-5`，这就是分角色模型分层最直接的证据。
+
+### 角色工作台
+
+![角色与模型](docs/screenshots/03-roles.png)
+
+七个逻辑角色状态每 1.5 秒刷新，每张卡显示阶段、模型和真实耗时，可就地改模型或暂停角色。
+
+### 记忆与反思
+
+![记忆流](docs/screenshots/04-memory.png)
+
+每个角色持久化 observation / handoff / plan / reflection 四类记忆并带重要度，下一次执行
+按相关性、重要度与新近度检索并注入上下文。`plan` 不参与检索——它由 `RoleSpec.schedule`
+在角色动手之前生成，只能复述 system prompt 已有的静态配置，却占了真实语料的 40%。
+
+### 路由与证据交接
+
+![路由与交接](docs/screenshots/05-routing.png)
+
+`证据交接` 和 `送审` 是两类不同的真实事件：前者是 context 阶段角色把证据交给 action
+阶段角色，后者是六个角色把结果送给 Judge。
+
+### 常驻巡检
+
+![常驻巡检](docs/screenshots/06-patrol.png)
+
+Job Scout 不等 `@` 也在干活，每 15 分钟核验一轮真实岗位。这张图里 40 轮巡检、2 次连续
+失败和真实的 `Connection error.` 都如实显示——可观测性的意义就是失败也要看得见。
+
+### 轨迹回放
+
+![运行回放](docs/screenshots/07-replay.png)
+
+历史运行按编排器、模式、状态、Agent 数和延迟列出，用于性能对照、失败定位和演示。
+早期的一次 `portfolio_coach` 回放截图见
+[`docs/assets/agent-town-replay.jpg`](docs/assets/agent-town-replay.jpg)。
 
 ## 核心能力
 
