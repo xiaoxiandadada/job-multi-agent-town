@@ -128,7 +128,7 @@ def test_job_scout_receives_latest_daily_and_job_tracker(tmp_path):
     )
     role = RoleSpec(
         role_id="job_scout",
-        display_name="岗位侦察员",
+        display_name="Job Scout",
         goal="发现并核验中国 2027 届正式校招岗位",
         system_prompt="只输出有来源的岗位。",
         tools=["web_search"],

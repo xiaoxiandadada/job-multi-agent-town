@@ -58,12 +58,17 @@
 - 飞书官方 `lark-oapi` SDK：WebSocket 长连接和消息收发。
 - Multi-Bot Binding：每个飞书 App ID 绑定零个（总控）或一个 `role_id`；多个
   身份共享同一 Runtime、模型客户端、并发信号量和 Judge。
-- `httpx`：调用用户自己的 OpenAI-compatible API。
+- `anthropic`：官方 SDK，调 Claude（含服务端 web_search / web_fetch）。
+- `httpx`：本地 Tool Executor 抓官方页，以及 OpenAI-compatible 旁路。
 - JSON `RoleRegistry`：版本化持久化角色、直接模型覆盖和一键新增。
 - JSON `TaskGraphStore`：按 run 保存任务、依赖、验收标准、状态与进度；使用文件锁
   支持 API、Bot 和日报进程共享同一持久卷。
 - append-only `MemoryStore`：保存每个角色的 observation、handoff、plan 与
   reflection；运行前按新近度、相关性和重要性检索。
+- `DailyPushScheduler`：轮询式每日推送。不睡到某一刻，因为睡过 09:30 的笔记本永远
+  醒不到那一刻；补推窗口有上限，已推日期落盘，flock 保证 API 与 watch 进程只有一个
+  真的发。缺人工日报时由 `daily_generate` 让角色按章节现场写，产物只落在
+  `data/runtime/daily/`，不进 `prepare/`。
 
 项目保留纯 `asyncio` baseline。两者复用同一个
 `RoleSpec`、RoleRegistry、模型客户端和 RunReport，因此可以在不改变角色提示词的
@@ -94,8 +99,8 @@ START
 ```
 
 - `route`：规则选择角色，不消耗模型。
-- `discovery_phase`：岗位侦察员先核验中国 2027 届正式校招机会。
-- `analysis_phase`：JD 分析师与岗位知识补充员基于侦察结果并行。
+- `discovery_phase`：Job Scout 先核验中国 2027 届正式校招机会。
+- `analysis_phase`：JD Analyst 与 Knowledge Curator 基于侦察结果并行。
 - `action_phase`：简历、作品、面试角色基于 discovery + analysis 结果并行。
 - `judge`：证据审核与最终排版。
 - Graph State：请求、分阶段角色 ID/结果、最终输出和是否调用 Judge。
@@ -121,11 +126,59 @@ LangGraph checkpoint 与角色长期记忆是两个不同层次：
 - ActivityEvent 是给网页和审计使用的不可变运行轨迹。
 
 角色执行前，Runtime 从 `memories.jsonl` 取 top-k 记忆，score 为
-`0.38 × recency + 0.40 × relevance + 0.22 × importance`。检索结果只作为
+`0.22 × recency + 0.56 × relevance + 0.22 × importance`。检索结果只作为
 “可能过时、需要复核”的上下文；每次输出/失败成为 observation，analysis → action
 成为 handoff，累积经验形成不含隐藏推理的 reflection。这对应 Generative Agents
 论文中的 observation / planning / reflection，但语义被约束为求职任务，不模拟
 无关生活行为。
+
+relevance 是**非对称**的 IDF 加权查询覆盖率，而不是余弦式的
+`|A∩B| / sqrt(|A|·|B|)`。原因是实测的：对称归一化让分母被文档长度支配，一篇 4000
+字、写着岗位 ID 和官方链接的核验报告最高只能拿到 ~0.08，而一条 33 字的
+「本轮计划：…」模板能拿到 0.153——检索分数和信息量是反相关的。同时 ascii
+标识符（岗位 ID、run ID、模型版本）额外加权 `IDENTIFIER_WEIGHT = 4.0`，因为中文按
+n-gram 切分后，一个 30 字的问题会产生 ~80 个 token，其中最稀有的往往是提问措辞
+（「之前核」「是什么」）而不是内容，稀有度本身分不开这两类。
+
+检索层还有三条与打分无关的规则，都是因为写这个文件的循环同时也在读它：
+
+- `plan` 不参与检索。它由 `RoleSpec.schedule` 在角色动手之前生成，只能复述
+  system prompt 已有的静态配置，却占了真实语料的 40%。
+- 近重复抑制（`DUPLICATE_THRESHOLD = 0.82`）。反思每几条观察就写一次，彼此只差一两
+  个词；4 个检索槽位装 4 种写法的同一句话，等于没有记忆。
+- 排序键是 `(score, timestamp)`，时间戳只用于打平，新记忆不会压过相关记忆。
+
+`benchmarks/eval_memory_retrieval.py` 是这套检索的回归基线，golden set 由语料里
+重复出现的岗位 ID 自动构造，因此相关性是可判定的谓词而不是主观判断。修复前后（真实
+语料，12 个案例，k=4）：
+
+| 指标 | 修复前 | 修复后 |
+| --- | --- | --- |
+| hit@4 | 0.000 | 1.000 |
+| recall@4 | 0.000 | 0.156（上限 0.196） |
+| precision@4 | 0.000 | 0.854 |
+| boilerplate@4 | 1.000 | 0.000 |
+
+`recall@4` 的上限是 k 决定的：常驻巡检每天重访同一个岗位，一个岗位有 40 条记忆写着
+答案，4 个槽位装不下 40 条，所以 0.196 就是算术上限，0.156 是它的 80%。
+
+## 读取路径
+
+网页每 1.5 秒轮询一次，`/api/town` 与 `/api/activity` 都读 append-only 文件，而没有
+任何东西会删行，所以“读整个文件再截尾”的成本会随进程运行时长无上限增长（活动流里
+66% 是常驻巡检心跳）。两处都改成按需读：
+
+- `ActivityStore.read` 从文件末尾反向按块读，取够 `limit` 条就停；
+- `MemoryStore.list_by_role` 一次扫描给出全部角色的尾部记忆，`build_town_snapshot`
+  不再按角色各读一遍。
+
+实测（2.03 MB / 3033 条活动，206 条记忆，输出逐字节一致）：
+
+| 路径 | 修复前 | 修复后 |
+| --- | --- | --- |
+| `ActivityStore.read(limit=300)` | 21.1 ms | 1.5 ms |
+| 7 次 `list(role_id=…)` → 1 次 `list_by_role()` | 25.1 ms | 3.6 ms |
+| `GET /api/town` | 58 ms | 19.9 ms |
 
 切换方式：
 
@@ -167,10 +220,14 @@ JD 与岗位知识，再把结果交给简历和作品角色；`/team` 才运行
 专家完整正文放在前面，Judge 只追加证据纠错，不允许覆盖或压缩专家回答，也不得混入
 与当前问题无关的日报内容。消息合并时会自动闭合未成对的 Markdown 代码围栏。
 
-角色配置中的 `tools` 当前仍是能力元数据；本地证据由 `RoleContextProvider` 按角色
-从当天日报、岗位表、学习计划、简历/作品材料中选取并注入。模型本身没有通用联网
-工具调用权限；需要实时联网核验时仍应接入受控 Tool Executor，并把来源证据返回给
-Judge，不能仅凭 `tools: ["web_search"]` 认为已经联网核验。
+角色配置中的 `tools` 现在是真的会执行的能力，不再只是元数据。`tools` 含
+`web_search` 的角色会拿到 Claude 服务端 `web_search_20260209` /
+`web_fetch_20260209`；网关不支持（显式 400，或收下工具却一次都不执行）时，同一次
+请求会自动降级到本地 Tool Executor—— `list_tracked_jobs` 读岗位表，`fetch_url`
+按域名白名单抓官方页，抓到的正文原样进上下文。两条路径都会把真实 URL 汇总进
+「联网来源（本次真实抓取）」，抓不到就必须写「页面未标注」或「正文需人工核验」，
+不允许用记忆里的内容顶替。本地证据仍由 `RoleContextProvider` 按角色从当天日报、
+岗位表、学习计划、简历/作品材料中注入。
 
 ## 分角色模型解析
 
@@ -188,9 +245,8 @@ API `GET /api/models` 返回 profile、角色 override 与最终解析模型；�
 
 当前生产分层是：
 
-- 岗位侦察、JD、简历、作品、面试、Judge：
-  `Qwen/Qwen2.5-32B-Instruct`；
-- 岗位知识补充员：`Qwen/Qwen3.5-397B-A17B`；
+- 岗位侦察、JD、简历、作品、面试、Judge：`claude-sonnet-5`；
+- Knowledge Curator：`claude-opus-5`（Claude 5）；
 - 角色知识 prompt 约束为能力地图、定义/直觉、架构、技术选型、生产故障、评测、
   面试问题、30/60/120 分钟学习路径和 GitHub 作品证据。
 
@@ -201,10 +257,10 @@ API `GET /api/models` 返回 profile、角色 override 与最终解析模型；�
 逻辑角色与飞书机器人身份分层：
 
 ```text
-Feishu App: AI 求职 Multi-Agent -> Controller / 自动路由
-Feishu App: 岗位侦察员        -> job_scout
-Feishu App: JD 分析师          -> jd_analyst
-Feishu App: 简历策略师          -> resume_strategist
+Feishu App: Chief of Staff -> Controller / 自动路由
+Feishu App: Job Scout        -> job_scout
+Feishu App: JD Analyst          -> jd_analyst
+Feishu App: Resume Strategist          -> resume_strategist
 ...
                                   |
                                   v

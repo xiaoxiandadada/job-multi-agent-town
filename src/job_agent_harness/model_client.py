@@ -3,26 +3,49 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
 import httpx
 
-from .models import ModelReply, RoleSpec
+from .models import ImageAttachment, ModelReply, RoleSpec
 from .role_context import build_role_context, default_prepare_dir
 
 
 class ModelClient(Protocol):
-    async def complete(self, role: RoleSpec, query: str) -> ModelReply: ...
+    async def complete(
+        self,
+        role: RoleSpec,
+        query: str,
+        *,
+        images: Sequence[ImageAttachment] = (),
+    ) -> ModelReply: ...
 
 
-class OpenAICompatibleClient:
-    """Small provider-neutral client for OpenAI-compatible chat APIs."""
+class RolePromptComposer:
+    """Model routing and evidence grounding shared by every provider.
+
+    Subclasses only add the transport. Model profiles, per-role overrides
+    and the bounded local evidence pack behave identically no matter which
+    API actually answers, so switching providers never changes what a role
+    is allowed to claim.
+    """
+
+    default_model_env = "JOB_AGENT_MODEL"
+    judge_model_env = "JOB_AGENT_JUDGE_MODEL"
+    knowledge_model_env = "JOB_AGENT_KNOWLEDGE_MODEL"
+    reliable_model_env = "JOB_AGENT_RELIABLE_MODEL"
+    default_model_fallback = ""
+    judge_model_fallback: str | None = None
+    knowledge_model_fallback: str | None = None
+    reliable_model_fallback: str | None = None
+    max_output_tokens_env = "JOB_AGENT_MAX_OUTPUT_TOKENS"
+    max_output_tokens_fallback = 8000
 
     def __init__(
         self,
-        base_url: str | None = None,
-        api_key: str | None = None,
+        *,
         default_model: str | None = None,
         judge_model: str | None = None,
         knowledge_model: str | None = None,
@@ -33,20 +56,26 @@ class OpenAICompatibleClient:
         role_context_max_chars: int | None = None,
         seed_roles_path: str | Path | None = None,
     ):
-        self.base_url = (base_url or os.getenv("JOB_AGENT_API_BASE", "")).rstrip("/")
-        self.api_key = api_key or os.getenv("JOB_AGENT_API_KEY", "")
-        self.default_model = default_model or os.getenv("JOB_AGENT_MODEL", "")
+        self.default_model = default_model or os.getenv(
+            self.default_model_env, self.default_model_fallback
+        )
         self.judge_model = judge_model or os.getenv(
-            "JOB_AGENT_JUDGE_MODEL", self.default_model
+            self.judge_model_env,
+            self.judge_model_fallback or self.default_model,
         )
         self.knowledge_model = knowledge_model or os.getenv(
-            "JOB_AGENT_KNOWLEDGE_MODEL", self.judge_model
+            self.knowledge_model_env,
+            self.knowledge_model_fallback or self.judge_model,
         )
         self.reliable_model = reliable_model or os.getenv(
-            "JOB_AGENT_RELIABLE_MODEL", self.judge_model
+            self.reliable_model_env,
+            self.reliable_model_fallback or self.judge_model,
         )
         self.max_output_tokens = max_output_tokens or int(
-            os.getenv("JOB_AGENT_MAX_OUTPUT_TOKENS", "800")
+            os.getenv(
+                self.max_output_tokens_env,
+                str(self.max_output_tokens_fallback),
+            )
         )
         configured_context_path = project_context_path or os.getenv(
             "JOB_AGENT_PROJECT_CONTEXT_FILE",
@@ -157,6 +186,40 @@ class OpenAICompatibleClient:
             + "\n\n".join(context_blocks)
         )
 
+
+class OpenAICompatibleClient(RolePromptComposer):
+    """Small provider-neutral client for OpenAI-compatible chat APIs."""
+
+    max_output_tokens_fallback = 800
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        default_model: str | None = None,
+        judge_model: str | None = None,
+        knowledge_model: str | None = None,
+        reliable_model: str | None = None,
+        max_output_tokens: int | None = None,
+        project_context_path: str | Path | None = None,
+        prepare_dir: str | Path | None = None,
+        role_context_max_chars: int | None = None,
+        seed_roles_path: str | Path | None = None,
+    ):
+        super().__init__(
+            default_model=default_model,
+            judge_model=judge_model,
+            knowledge_model=knowledge_model,
+            reliable_model=reliable_model,
+            max_output_tokens=max_output_tokens,
+            project_context_path=project_context_path,
+            prepare_dir=prepare_dir,
+            role_context_max_chars=role_context_max_chars,
+            seed_roles_path=seed_roles_path,
+        )
+        self.base_url = (base_url or os.getenv("JOB_AGENT_API_BASE", "")).rstrip("/")
+        self.api_key = api_key or os.getenv("JOB_AGENT_API_KEY", "")
+
     async def available_models(self) -> list[str]:
         if not self.base_url or not self.api_key:
             return []
@@ -175,13 +238,31 @@ class OpenAICompatibleClient:
             }
         )
 
-    async def complete(self, role: RoleSpec, query: str) -> ModelReply:
+    async def complete(
+        self,
+        role: RoleSpec,
+        query: str,
+        *,
+        images: Sequence[ImageAttachment] = (),
+    ) -> ModelReply:
         if not self.base_url or not self.api_key or not self.default_model:
             raise RuntimeError(
                 "model API is not configured; set JOB_AGENT_API_BASE, "
                 "JOB_AGENT_API_KEY and JOB_AGENT_MODEL"
             )
         model = self.model_for(role)
+        # Images first, text last: both providers read the caption as being
+        # about the pictures above it, and reversing that makes the model
+        # answer the question before it has looked.
+        user_content: str | list[dict[str, object]] = query
+        if images:
+            user_content = [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image.to_data_url()},
+                }
+                for image in images
+            ] + [{"type": "text", "text": query}]
         payload = {
             "model": model,
             "messages": [
@@ -189,7 +270,7 @@ class OpenAICompatibleClient:
                     "role": "system",
                     "content": self.system_prompt_for(role),
                 },
-                {"role": "user", "content": query},
+                {"role": "user", "content": user_content},
             ],
             "temperature": 0.2,
             "max_tokens": self.max_output_tokens,
@@ -216,16 +297,27 @@ class MockModelClient:
         self.latency_seconds = latency_seconds
         self.calls: list[str] = []
         self.queries: list[tuple[str, str]] = []
+        #: (role_id, image count) per call — lets a test prove which roles were
+        #: actually handed pictures without decoding base64.
+        self.image_calls: list[tuple[str, int]] = []
 
-    async def complete(self, role: RoleSpec, query: str) -> ModelReply:
+    async def complete(
+        self,
+        role: RoleSpec,
+        query: str,
+        *,
+        images: Sequence[ImageAttachment] = (),
+    ) -> ModelReply:
         import asyncio
 
         self.calls.append(role.role_id)
         self.queries.append((role.role_id, query))
+        self.image_calls.append((role.role_id, len(images)))
         if self.latency_seconds:
             await asyncio.sleep(self.latency_seconds)
+        seen = f"[看到 {len(images)} 张图片] " if images else ""
         return ModelReply(
-            content=f"[{role.display_name}] {query}",
+            content=f"[{role.display_name}] {seen}{query}",
             input_tokens=len(query),
             output_tokens=8,
             model="mock",

@@ -6,14 +6,14 @@
 
 | 飞书应用名称 | 绑定 role_id | 作用 |
 | --- | --- | --- |
-| AI 求职 Multi-Agent | 无（总控） | 自动路由、团队命令、日报 |
-| 岗位侦察员 | `job_scout` | 岗位真实性、届别、截止日期和来源 |
-| JD 分析师 | `jd_analyst` | JD 关键词、硬要求和缺口 |
-| 岗位知识补充员 | `job_knowledge_curator` | 技术栈、评测知识和学习路线 |
-| 简历策略师 | `resume_strategist` | 简历版本和 bullet |
-| 作品教练 | `portfolio_coach` | MVP、作品证据和指标 |
-| 面试教练 | `interview_coach` | 题目、追问和评分 |
-| 证据审核员 | `judge` | 可选的直接证据审查入口 |
+| Chief of Staff | 无（总控） | 自动路由、团队命令、日报 |
+| Job Scout | `job_scout` | 岗位真实性、届别、截止日期和来源 |
+| JD Analyst | `jd_analyst` | JD 关键词、硬要求和缺口 |
+| Knowledge Curator | `job_knowledge_curator` | 技术栈、评测知识和学习路线 |
+| Resume Strategist | `resume_strategist` | 简历版本和 bullet |
+| Portfolio Coach | `portfolio_coach` | MVP、作品证据和指标 |
+| Interview Coach | `interview_coach` | 题目、追问和评分 |
+| Evidence Judge | `judge` | 可选的直接证据审查入口 |
 
 飞书应用名称决定群聊中显示和可搜索的机器人名称。Role Registry 的
 `display_name` 应与应用名称保持一致。
@@ -28,11 +28,11 @@
 共享 Role Registry、模型 API、并发上限、LangGraph/asyncio 编排器和 Judge。
 
 ```text
-@岗位侦察员 --------\
-@JD 分析师 ----------\
-@简历策略师 ----------> 同一个 Feishu Channel 进程
-@作品教练 ------------/          |
-@面试教练 -----------/       Role Binding
+@Job Scout --------\
+@JD Analyst ----------\
+@Resume Strategist ----------> 同一个 Feishu Channel 进程
+@Portfolio Coach ------------/          |
+@Interview Coach -----------/       Role Binding
                                 |
                      Multi-Agent Orchestrator
                                 |

@@ -133,3 +133,42 @@ def test_daily_report_is_partitioned_across_all_seven_role_bots(tmp_path):
     )
     assert set(messages) == set(role_digests)
     assert all(parts for parts in messages.values())
+
+
+def test_split_markdown_never_leaves_a_code_fence_open():
+    """A section boundary can fall inside a fenced block.
+
+    Feishu then renders the remaining sections as one grey code box, which is
+    how a whole daily brief turned into monospace.
+    """
+
+    from job_agent_harness.daily_brief import split_markdown
+
+    body = "\n".join(
+        [
+            "## 岗位 JD",
+            "```text",
+            *[f"第 {index} 行 JD 正文，足够长以便触发切分。" for index in range(60)],
+            "```",
+            "## 今日结论",
+            "先投拼多多。",
+        ]
+    )
+
+    chunks = split_markdown(body, max_chars=600)
+
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert chunk.count("```") % 2 == 0, chunk
+    assert "先投拼多多。" in chunks[-1]
+    assert chunks[-1].count("```") == 0 or not chunks[-1].startswith("```text")
+
+
+def test_rebalance_reopens_the_block_with_its_language():
+    from job_agent_harness.daily_brief import rebalance_code_fences
+
+    chunks = rebalance_code_fences(["## A\n```json\n{", '  "k": 1'])
+
+    assert chunks[0].endswith("```")
+    assert chunks[1].startswith("```json")
+    assert chunks[1].endswith("```")

@@ -13,6 +13,24 @@ Python Runtime 中，不使用飞书 AI。
 | 读取用户发给机器人的单聊消息 | `im:message.p2p_msg:readonly` | 接收单聊 |
 | 获取群组中用户 @ 机器人消息 | `im:message.group_at_msg:readonly` | 接收群聊提及 |
 
+Interview Coach（`interview_coach`）身份如果要支持语音模拟面试，额外申请：
+
+| 权限 | Scope | 用途 |
+| --- | --- | --- |
+| 识别语音文件 | `speech_to_text:speech` | 把候选人的语音回答转成文字 |
+| 上传图片或文件 | `im:resource:upload` | 上传教练出题的 opus 语音（`im:resource` 亦可） |
+
+这两项只有教练身份需要，而且缺哪一项的表现不一样：
+
+- 缺 `speech_to_text:speech`：语音回答收不到转写，机器人回复缺哪个 scope，不会
+  静默丢掉这一轮；
+- 缺 `im:resource:upload`：文字问答完全正常，只有语音上传被拒
+  （`code=99991672`），机器人降级为文字版并提示一次要开通的 scope。
+
+教练的语音回复还需要本机安装一个 opus 编码器
+（`brew install ffmpeg` 或 `brew install opus-tools`），否则同样降级为文字版并
+提示一次安装命令。这两类降级各自只提示一次，不会每题重复。
+
 事件配置：
 
 1. 订阅方式选择“使用长连接接收事件”。
@@ -21,7 +39,7 @@ Python Runtime 中，不使用飞书 AI。
 4. 创建并发布版本。首次验证建议只把应用开放给应用所有者，关闭外部群和外部
    用户单聊。
 
-如果需要在同一个群里分别 `@岗位侦察员`、`@简历策略师` 等身份，每个名称需要
+如果需要在同一个群里分别 `@Job Scout`、`@Resume Strategist` 等身份，每个名称需要
 一个独立飞书自建应用，并重复以上最小权限和事件配置。它们不需要分别部署后端：
 同一个 `job-agent-feishu` 进程可以托管全部身份。配置方式见
 [`feishu-multi-bot.md`](feishu-multi-bot.md)。
@@ -111,7 +129,7 @@ benchmark 和演示 GIF，再由容器平台拉取仓库部署。
 | `/roles` | 0 | 0 |
 | `/group-create` | 创建/绑定私有 Agent 小镇群 | 0 |
 | `/daily [YYYY-MM-DD] [full]` | 读取并推送日报 | 0 |
-| `/knowledge <任务>` | 岗位知识补充员 | 2（含 Judge） |
+| `/knowledge <任务>` | Knowledge Curator | 2（含 Judge） |
 | `/job <任务>` | 岗位侦察、JD 分析、岗位知识 | 4（含 Judge） |
 | `/apply <任务>` | JD/知识 → 简历/作品 | 5（含 Judge） |
 | `/interview <任务>` | JD/知识 → 面试 | 4（含 Judge） |
@@ -149,7 +167,7 @@ reasoning 尾延迟若明显偏高，可单独设置 `JOB_AGENT_KNOWLEDGE_MODEL`
 还可对任意角色做更高优先级的直接覆盖：
 
 ```dotenv
-JOB_AGENT_ROLE_MODEL_JOB_KNOWLEDGE_CURATOR=Qwen/Qwen3.5-397B-A17B
+JOB_AGENT_ROLE_MODEL_JOB_KNOWLEDGE_CURATOR=claude-opus-5
 ```
 
 解析顺序为 `RoleSpec.model > JOB_AGENT_ROLE_MODEL_<ROLE_ID> > model_profile`。
@@ -182,6 +200,35 @@ uv run job-agent-push-daily --full
 因此完整配置下通常是 9 条飞书消息、8 个任务节点。若只要角色消息，使用
 `--roles-only`。
 
+### 每天自动推
+
+上面那条命令由定时器接管，不需要每天手敲。`job-agent-api` 与 `job-agent-watch`
+启动时都会尝试拉起它，由 `data/runtime/daily_push.lock` 决定谁真的发：
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `JOB_AGENT_DAILY_PUSH` | `1` | 关掉就退回手动 |
+| `JOB_AGENT_DAILY_PUSH_AT` | `09:30` | 只接受 `HH:MM` |
+| `JOB_AGENT_DAILY_PUSH_TZ` | `Asia/Shanghai` | |
+| `JOB_AGENT_DAILY_PUSH_MAX_DELAY_HOURS` | `6` | 超窗判定过期，当天不推 |
+| `JOB_AGENT_DAILY_PUSH_FULL` | `0` | 默认摘要，`1` 发完整日报 |
+| `JOB_AGENT_DAILY_PUSH_POLL_SECONDS` | `120` | |
+| `JOB_AGENT_DAILY_PUSH_RETRY_SECONDS` | `600` | 失败退避，窗口内继续重试 |
+
+定时器是轮询而不是睡到某一刻：合盖睡过 09:30 的机器醒来后仍会补推。已推日期写在
+`data/runtime/daily_push_state.json`，重启不会重复推。运行状态见
+`GET /api/always-on` 响应里的 `daily_push` 字段（`next_push_at`、
+`last_pushed_date`、`consecutive_failures`、`last_error`）。
+
+当天没有人工日报时，定时路径会让七个角色按章节各写一段兜底日报，落到
+`data/runtime/daily/<YYYY-MM-DD>.md`，不写进 `prepare/`；`/daily` 命令也会读这个缓存。
+人工日报存在时永远优先。手动等价命令：
+
+```bash
+uv run job-agent-write-daily --date 2026-08-05
+uv run job-agent-push-daily --generate
+```
+
 LangGraph 对照运行：
 
 ```bash
@@ -196,7 +243,7 @@ uv run python benchmarks/compare_harness_langgraph.py
 
 2026-07-30 的完整验收见
 [`acceptance-2026-07-30.md`](acceptance-2026-07-30.md)：日报向 Agent 小镇群发送
-9 条消息，八个任务节点 100%；真实 `@岗位知识补充员` 使用 397B 专家模型并由 32B
+9 条消息，八个任务节点 100%；真实 `@Knowledge Curator` 使用 397B 专家模型并由 32B
 Judge 追加审核。
 
 ## 6. 发布前检查

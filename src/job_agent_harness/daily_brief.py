@@ -19,31 +19,31 @@ LEARNING_SECTIONS = {
     "今日数学/概率统计题": "概率统计",
 }
 ROLE_DAILY_LABELS = {
-    "job_scout": ("岗位侦察员", "新增岗位、链接核验与投递优先级"),
-    "jd_analyst": ("JD 分析师", "岗位要求、匹配点与技能缺口"),
+    "job_scout": ("Job Scout", "新增岗位、链接核验与投递优先级"),
+    "jd_analyst": ("JD Analyst", "岗位要求、匹配点与技能缺口"),
     "job_knowledge_curator": (
-        "岗位知识补充员",
+        "Knowledge Curator",
         "书籍章节、技术栈与学习产出",
     ),
-    "resume_strategist": ("简历策略师", "优先简历版本与 bullet 动作"),
-    "portfolio_coach": ("作品教练", "Vibe Coding 灵感与作品推进"),
-    "interview_coach": ("面试教练", "具体题目、口述与追问训练"),
-    "judge": ("证据审核员", "交付核对与今天先做三件事"),
+    "resume_strategist": ("Resume Strategist", "优先简历版本与 bullet 动作"),
+    "portfolio_coach": ("Portfolio Coach", "Vibe Coding 灵感与作品推进"),
+    "interview_coach": ("Interview Coach", "具体题目、口述与追问训练"),
+    "judge": ("Evidence Judge", "交付核对与今天先做三件事"),
 }
 
 
 def build_daily_assignment_digest(target_date: str) -> str:
     lines = [
         f"# {target_date} 新岗位任务拆解",
-        "> AI 求职 Multi-Agent 已把日报转成可追踪任务图。"
+        "> Chief of Staff 已把日报转成可追踪任务图。"
         "依赖关系：岗位发现 → JD/知识分析 → 简历/作品/面试 → Judge。",
         "## 角色任务",
     ]
     for role_id, (display_name, assignment) in ROLE_DAILY_LABELS.items():
         dependencies = {
             "job_scout": "无，首先执行",
-            "jd_analyst": "依赖岗位侦察员",
-            "job_knowledge_curator": "依赖岗位侦察员",
+            "jd_analyst": "依赖 Job Scout",
+            "job_knowledge_curator": "依赖 Job Scout",
             "resume_strategist": "依赖 JD 与岗位知识",
             "portfolio_coach": "依赖 JD 与岗位知识",
             "interview_coach": "依赖 JD 与岗位知识",
@@ -380,7 +380,57 @@ def split_markdown(markdown: str, max_chars: int = 6000) -> list[str]:
             current_length += len(block) + 1
     if current:
         chunks.append("\n".join(current).strip())
-    return [chunk for chunk in chunks if chunk]
+    return rebalance_code_fences([chunk for chunk in chunks if chunk])
+
+
+def rebalance_code_fences(chunks: list[str]) -> list[str]:
+    """Keep every chunk's code fences paired.
+
+    This splitter cuts on section and paragraph boundaries, which can land
+    inside a fenced block. Feishu then renders the rest of that message — and
+    the whole next section — as one grey code box.
+    """
+
+    balanced: list[str] = []
+    carried: str | None = None  # info string of the fence still open
+    for chunk in chunks:
+        text = chunk if carried is None else f"```{carried}\n{chunk}"
+        # The re-opening line above is part of ``text``, so scanning starts
+        # from "no fence open" either way.
+        open_fence: str | None = None
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                open_fence = None if open_fence is not None else stripped[3:].strip()
+        if open_fence is not None:
+            text = f"{text}\n```"
+        carried = open_fence
+        balanced.append(text)
+    return balanced
+
+
+def read_daily_markdown(
+    prepare_dir: Path,
+    target_date: str,
+    *,
+    cache_dir: Path | None = None,
+) -> str:
+    """The day's brief, preferring the hand-written one over a generated one.
+
+    ``cache_dir`` is where ``daily_generate`` leaves briefs the roles wrote
+    themselves. It is only consulted when the real one is absent, so a brief that
+    was prepared by hand is never shadowed by a machine-written stand-in.
+    """
+
+    if not DATE_PATTERN.fullmatch(target_date):
+        raise ValueError("日期必须是 YYYY-MM-DD")
+    candidates = [Path(prepare_dir) / "daily" / f"{target_date}.md"]
+    if cache_dir is not None:
+        candidates.append(Path(cache_dir) / "daily" / f"{target_date}.md")
+    for path in candidates:
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+    raise FileNotFoundError(f"没有找到 {target_date} 的日报")
 
 
 def load_daily_messages(
@@ -388,13 +438,14 @@ def load_daily_messages(
     target_date: str,
     mode: str = "summary",
     max_chars: int = 6000,
+    *,
+    cache_dir: Path | None = None,
 ) -> list[str]:
-    if not DATE_PATTERN.fullmatch(target_date):
-        raise ValueError("日期必须是 YYYY-MM-DD")
-    path = prepare_dir / "daily" / f"{target_date}.md"
-    if not path.exists():
-        raise FileNotFoundError(f"没有找到 {target_date} 的日报")
-    markdown = path.read_text(encoding="utf-8")
+    markdown = read_daily_markdown(
+        prepare_dir,
+        target_date,
+        cache_dir=cache_dir,
+    )
     rendered = (
         build_full_daily(markdown, target_date)
         if mode == "full"
@@ -407,19 +458,16 @@ def load_role_daily_messages(
     prepare_dir: Path,
     target_date: str,
     max_chars: int = 6000,
+    *,
+    cache_dir: Path | None = None,
 ) -> dict[str, list[str]]:
-    if not DATE_PATTERN.fullmatch(target_date):
-        raise ValueError("日期必须是 YYYY-MM-DD")
-    path = prepare_dir / "daily" / f"{target_date}.md"
-    if not path.exists():
-        raise FileNotFoundError(f"没有找到 {target_date} 的日报")
     rendered = build_role_daily_digests(
-        path.read_text(encoding="utf-8"),
+        read_daily_markdown(prepare_dir, target_date, cache_dir=cache_dir),
         target_date,
     )
     return {
-        role_id: split_markdown(message, max_chars=max_chars)
-        for role_id, message in rendered.items()
+        role_id: split_markdown(markdown, max_chars=max_chars)
+        for role_id, markdown in rendered.items()
     }
 
 

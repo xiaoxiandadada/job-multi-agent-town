@@ -16,7 +16,7 @@ class RoleSpec(BaseModel):
     model: str | None = Field(default=None, min_length=2, max_length=200)
     workflow_stage: Literal["auto", "context", "action", "judge"] = "auto"
     enabled: bool = True
-    timeout_seconds: float = Field(default=45.0, ge=1.0, le=180.0)
+    timeout_seconds: float = Field(default=45.0, ge=1.0, le=900.0)
     town_place: str | None = Field(default=None, min_length=2, max_length=40)
     town_icon: str = Field(default="🏠", min_length=1, max_length=8)
     town_x: float | None = Field(default=None, ge=4, le=96)
@@ -43,7 +43,7 @@ class RolePatch(BaseModel):
     model: str | None = Field(default=None, min_length=2, max_length=200)
     workflow_stage: Literal["auto", "context", "action", "judge"] | None = None
     enabled: bool | None = None
-    timeout_seconds: float | None = Field(default=None, ge=1.0, le=180.0)
+    timeout_seconds: float | None = Field(default=None, ge=1.0, le=900.0)
     town_place: str | None = Field(default=None, min_length=2, max_length=40)
     town_icon: str | None = Field(default=None, min_length=1, max_length=8)
     town_x: float | None = Field(default=None, ge=4, le=96)
@@ -61,11 +61,67 @@ class RolePatch(BaseModel):
         return list(dict.fromkeys(item.strip() for item in value if item.strip()))
 
 
+#: The four formats Claude accepts as image input. Anything else has to be
+#: converted before it gets here, so an unsupported screenshot fails at the
+#: entry point with a readable message instead of as a provider 400.
+ImageMediaType = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
+
+#: Base64 is ~4/3 of the raw bytes, and Claude rejects images over 5 MB. Cap
+#: the encoded string instead of the decoded one: that is the value that
+#: actually travels, and it keeps a 40 MB paste out of the request body.
+MAX_IMAGE_BASE64_CHARS = 7_000_000
+
+
+class ImageAttachment(BaseModel):
+    """One picture the user attached, already base64 encoded.
+
+    ``source_name`` is only used in receipts ("读了 jd.png") — it never enters a
+    prompt, because a Feishu ``file_key`` or a user's filename is not evidence
+    about the job.
+    """
+
+    media_type: ImageMediaType = "image/png"
+    data: str = Field(min_length=8, max_length=MAX_IMAGE_BASE64_CHARS)
+    source_name: str = Field(default="", max_length=200)
+
+    def to_anthropic_block(self) -> dict[str, object]:
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": self.media_type,
+                "data": self.data,
+            },
+        }
+
+    def to_data_url(self) -> str:
+        """The OpenAI-compatible spelling of the same picture."""
+
+        return f"data:{self.media_type};base64,{self.data}"
+
+
 class RunRequest(BaseModel):
     query: str = Field(min_length=2, max_length=20_000)
     requested_roles: list[str] = Field(default_factory=list)
     mode: Literal["single", "sequential", "parallel", "collaborative"] = "parallel"
     use_judge: bool = True
+    #: Pictures every working role of this run may look at. The chief of staff
+    #: usually empties this after reading them once (see ``chief_of_staff``),
+    #: so a screenshot is not billed as image tokens by seven roles in a row.
+    #: Capped at 9 to match one Feishu media batch.
+    images: list[ImageAttachment] = Field(default_factory=list, max_length=9)
+    #: Per-run override of every selected role's own timeout. A background
+    #: patrol has nobody waiting on it, so it can afford the multi-round tool
+    #: loop that a Feishu reply cannot.
+    timeout_seconds: float | None = Field(default=None, ge=1.0, le=900.0)
+    #: Who asked for this run. The page has exactly one "current run" slot, and
+    #: the background keeps firing runs into it: a patrol every few minutes, the
+    #: daily push once a morning. Without this they sort to the front and shove
+    #: the collaborative run the user is watching off the screen. While such a
+    #: run is still in flight nothing else tells it apart from a one-role request
+    #: typed by hand, so the caller has to say. Anything other than ``user`` is
+    #: background work and stays out of the header.
+    origin: Literal["user", "patrol", "schedule"] = "user"
 
 
 class ModelReply(BaseModel):

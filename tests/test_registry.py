@@ -102,7 +102,7 @@ def test_from_seed_backfills_new_town_fields_without_overwriting_user_fields(
         update={
             "display_name": "种子名称",
             "workflow_stage": "context",
-            "town_place": "机会驿站",
+            "town_place": "Scout Outpost",
             "town_icon": "📡",
             "schedule": ["核验岗位", "检查来源"],
         }
@@ -117,5 +117,5 @@ def test_from_seed_backfills_new_town_fields_without_overwriting_user_fields(
 
     assert role.display_name == "用户自定义侦察员"
     assert role.workflow_stage == "context"
-    assert role.town_place == "机会驿站"
+    assert role.town_place == "Scout Outpost"
     assert role.schedule == ["核验岗位", "检查来源"]

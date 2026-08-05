@@ -57,13 +57,30 @@ def build_task_graph_store() -> TaskGraphStore:
     return TaskGraphStore(runtime_data_dir() / "task_graphs")
 
 
+def build_model_client():
+    """Pick the model provider. Claude is the default; the OpenAI-compatible
+    client stays available for anyone pointing this harness at their own
+    endpoint."""
+
+    provider = os.getenv("JOB_AGENT_PROVIDER", "anthropic").strip().lower()
+    if provider in {"anthropic", "claude"}:
+        from .anthropic_client import AnthropicClient
+
+        return AnthropicClient()
+    if provider in {"openai", "openai_compatible", "openai-compatible"}:
+        return OpenAICompatibleClient()
+    raise ValueError(
+        "JOB_AGENT_PROVIDER 必须是 anthropic 或 openai"
+    )
+
+
 def build_orchestrator(
     registry: RoleRegistry | None = None,
     memory_store: MemoryStore | None = None,
 ):
     baseline = MultiAgentOrchestrator(
         registry=registry or build_registry(),
-        model_client=OpenAICompatibleClient(),
+        model_client=build_model_client(),
         max_concurrency=int(os.getenv("JOB_AGENT_MAX_CONCURRENCY", "4")),
         activity_store=build_activity_store(),
         memory_store=memory_store or build_memory_store(),

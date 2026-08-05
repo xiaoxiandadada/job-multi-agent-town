@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import contextlib
+from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .activity import ActivityEvent
+from .always_on import always_on_enabled, build_watcher
+from .chief_of_staff import ChiefOfStaff
 from .cognition import AgentMemory, RetrievedMemory
+from .daily_schedule import DailyPushScheduler
 from .models import RolePatch, RoleSpec, RunReport, RunRequest
 from .runtime import (
     ROOT,
@@ -18,11 +24,15 @@ from .runtime import (
     build_task_graph_store,
 )
 from .tasks import TaskGraph
-from .town import TownSnapshot, build_town_snapshot
+from .town import (
+    TownSnapshot,
+    build_town_snapshot,
+    current_run_id_for_events,
+    shifts_for_events,
+)
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Job Agent Studio", version="0.1.0")
     registry = build_registry()
     activity_store = build_activity_store()
     memory_store = build_memory_store()
@@ -30,6 +40,47 @@ def create_app() -> FastAPI:
     orchestrator = build_orchestrator(registry, memory_store)
     base_orchestrator = getattr(orchestrator, "base", orchestrator)
     model_client = base_orchestrator.model_client
+    chief = ChiefOfStaff(orchestrator)
+    watcher = build_watcher(orchestrator, activity_store)
+    daily_scheduler = DailyPushScheduler()
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_: FastAPI):
+        # The always-on shift lives with the server process, so opening the
+        # dashboard is enough to see the agents working. `job-agent-watch`
+        # holds the same lock, so running both never doubles the patrols.
+        if always_on_enabled():
+            watcher.start()
+        # Same deal for the morning brief: it used to need somebody to type
+        # `job-agent-push-daily`, so "every day" quietly meant "never".
+        daily_scheduler.start()
+        try:
+            yield
+        finally:
+            await watcher.stop()
+            await daily_scheduler.stop()
+
+    app = FastAPI(title="Job Agent Studio", version="0.1.0", lifespan=lifespan)
+
+    @app.get("/api/always-on")
+    async def always_on_status():
+        # `watcher.status()` only knows about this process. The patrol usually
+        # runs in `job-agent-watch`, so the duty report has to come from the
+        # shared event log — otherwise a working watcher reads as "not running".
+        shifts = shifts_for_events(
+            activity_store.read(limit=600),
+            display_names={
+                role.role_id: role.display_name
+                for role in registry.list_roles(include_disabled=True)
+            },
+            now=datetime.now(timezone.utc),
+        )
+        return {
+            "configured": always_on_enabled(),
+            **watcher.status(),
+            "shifts": [shift.model_dump() for shift in shifts],
+            "daily_push": daily_scheduler.status(),
+        }
 
     @app.get("/")
     async def index():
@@ -144,7 +195,7 @@ def create_app() -> FastAPI:
                 replay_total_steps=total_steps,
                 task_graph=task_graph_store.get(run_id),
             )
-        current_run_id = events[-1].run_id if events else None
+        current_run_id = current_run_id_for_events(events)
         return build_town_snapshot(
             registry,
             events,
@@ -214,7 +265,21 @@ def create_app() -> FastAPI:
 
     @app.post("/api/runs", response_model=RunReport)
     async def run_agents(request: RunRequest):
-        return await orchestrator.run(request)
+        # The web chat window is the controller's other front door, so it gets
+        # the same Chief of Staff treatment as the Feishu controller bot: the
+        # receipt and the closing arrive as activity events the page is already
+        # polling, and attached pictures are read once here rather than by every
+        # selected role.
+        return await chief.run(request)
+
+    # Mounted last so the routes above keep priority: the page is no longer one
+    # file but a directory (styles, app.js, the Phaser scene, the tilesheets),
+    # and every one of them has to be reachable for the town to render at all.
+    app.mount(
+        "/",
+        StaticFiles(directory=Path(ROOT) / "web", html=True),
+        name="web",
+    )
 
     return app
 

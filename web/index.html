@@ -3,589 +3,130 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Job Agent Studio · Live Console</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #07100e;
-      --panel: #0d1916;
-      --panel-2: #111f1b;
-      --line: #263a34;
-      --text: #edf6f1;
-      --muted: #93a9a1;
-      --green: #7cf2bd;
-      --green-2: #24c88a;
-      --amber: #f5c873;
-      --red: #ff887c;
-      --blue: #82b9ff;
-      --shadow: 0 20px 70px rgba(0, 0, 0, .34);
-      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont,
-        "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      color: var(--text);
-      background:
-        radial-gradient(circle at 74% -10%, rgba(36, 200, 138, .16), transparent 32rem),
-        linear-gradient(180deg, #08130f 0, var(--bg) 42rem);
-    }
-    button, input, textarea, select { font: inherit; }
-    button { cursor: pointer; }
-    .shell { max-width: 1420px; margin: 0 auto; padding: 30px clamp(18px, 3vw, 44px) 70px; }
-    .topbar {
-      display: flex; align-items: center; justify-content: space-between;
-      gap: 18px; padding-bottom: 28px; border-bottom: 1px solid var(--line);
-    }
-    .brand { display: flex; align-items: center; gap: 13px; }
-    .mark {
-      display: grid; place-items: center; width: 42px; height: 42px;
-      border: 1px solid #3d725f; border-radius: 12px;
-      background: linear-gradient(145deg, #18352c, #0e211b);
-      color: var(--green); font-weight: 900; letter-spacing: -.08em;
-      box-shadow: inset 0 1px rgba(255,255,255,.08);
-    }
-    .brand strong { display: block; font-size: 16px; letter-spacing: .01em; }
-    .eyebrow {
-      margin: 0 0 5px; color: var(--green); font: 700 11px/1.2 ui-monospace, monospace;
-      letter-spacing: .18em; text-transform: uppercase;
-    }
-    .statusline { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
-    .live-dot {
-      width: 8px; height: 8px; border-radius: 50%; background: var(--green);
-      box-shadow: 0 0 0 5px rgba(124, 242, 189, .09), 0 0 20px var(--green);
-    }
-    .hero {
-      display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr);
-      gap: 32px; align-items: end; padding: 52px 0 34px;
-    }
-    h1 { margin: 0; max-width: 850px; font-size: clamp(42px, 6vw, 82px); line-height: .98; letter-spacing: -.055em; }
-    .lede { margin: 20px 0 0; max-width: 720px; color: var(--muted); font-size: 16px; line-height: 1.75; }
-    .run-summary {
-      border-left: 1px solid var(--line); padding: 4px 0 4px 28px;
-      min-height: 126px; display: flex; flex-direction: column; justify-content: center;
-    }
-    .run-summary .run-label { color: var(--muted); font: 12px ui-monospace, monospace; }
-    .run-summary .run-state { margin: 9px 0 5px; font-size: 26px; font-weight: 760; letter-spacing: -.03em; }
-    .run-summary .run-query { color: var(--muted); line-height: 1.5; font-size: 13px; }
-    .metrics {
-      display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
-      border: 1px solid var(--line); border-radius: 18px; overflow: hidden;
-      background: rgba(13, 25, 22, .78); box-shadow: var(--shadow);
-    }
-    .metric { min-height: 104px; padding: 22px; border-right: 1px solid var(--line); }
-    .metric:last-child { border-right: 0; }
-    .metric span { color: var(--muted); font-size: 12px; }
-    .metric strong { display: block; margin-top: 11px; font: 700 clamp(22px, 3vw, 32px)/1 ui-monospace, monospace; }
-    .section-head {
-      display: flex; align-items: end; justify-content: space-between; gap: 18px;
-      margin: 44px 0 16px;
-    }
-    h2 { margin: 0; font-size: 22px; letter-spacing: -.025em; }
-    .section-head p { margin: 0; color: var(--muted); font-size: 13px; }
-    .town-shell {
-      border: 1px solid var(--line); border-radius: 18px; overflow: hidden;
-      background: #0b1713; box-shadow: var(--shadow);
-    }
-    .town-toolbar {
-      display: flex; align-items: center; justify-content: space-between; gap: 16px;
-      padding: 13px 17px; border-bottom: 1px solid var(--line);
-      color: var(--muted); font: 11px ui-monospace, monospace;
-    }
-    .town-toolbar strong { color: var(--text); font-weight: 700; }
-    .town-tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; justify-content: flex-end; }
-    .town-replay { display: flex; align-items: center; gap: 7px; }
-    .town-replay select {
-      max-width: 154px; padding: 6px 8px; border: 1px solid var(--line);
-      border-radius: 7px; color: #c4d6cf; background: #0a1511;
-      font: 10px ui-monospace, monospace;
-    }
-    .town-replay input[type="range"] {
-      width: 112px; margin: 0; padding: 0; accent-color: var(--green-2);
-    }
-    .town-replay button {
-      min-width: auto; padding: 6px 8px; border: 1px solid #416b5c;
-      border-radius: 7px; color: var(--green); background: #0b1914;
-      font: 700 9px ui-monospace, monospace;
-    }
-    .town-replay button:disabled { opacity: .42; cursor: default; }
-    .town-replay-step { min-width: 42px; color: var(--green); text-align: right; }
-    .town-legend { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-    .town-legend span { display: flex; align-items: center; gap: 6px; }
-    .legend-dot { width: 7px; height: 7px; border-radius: 50%; background: #63766f; }
-    .legend-dot.running { background: var(--green); box-shadow: 0 0 10px var(--green); }
-    .legend-dot.done { background: var(--blue); }
-    .town-map {
-      position: relative; min-height: clamp(460px, 54vw, 680px); overflow: hidden;
-      background:
-        linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px),
-        radial-gradient(circle at 50% 46%, rgba(124,242,189,.08), transparent 20%),
-        linear-gradient(135deg, #10251d, #0c1d17 48%, #10231c);
-      background-size: 24px 24px, 24px 24px, auto, auto;
-      isolation: isolate;
-    }
-    .town-map::before, .town-map::after {
-      content: ""; position: absolute; inset: 0; pointer-events: none; z-index: -1;
-    }
-    .town-map::before {
-      opacity: .18;
-      background:
-        radial-gradient(circle at 8% 82%, #8ace7d 0 3px, transparent 4px),
-        radial-gradient(circle at 93% 17%, #8ace7d 0 3px, transparent 4px),
-        radial-gradient(circle at 4% 30%, #8ace7d 0 3px, transparent 4px),
-        radial-gradient(circle at 87% 88%, #8ace7d 0 3px, transparent 4px);
-      background-size: 52px 52px, 61px 61px, 73px 73px, 67px 67px;
-    }
-    .town-map::after {
-      box-shadow: inset 0 0 90px rgba(0,0,0,.36);
-    }
-    .town-roads { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
-    .road-base { fill: none; stroke: rgba(207, 225, 214, .11); stroke-width: 3.8; stroke-linecap: round; stroke-linejoin: round; }
-    .road-flow { fill: none; stroke: rgba(124, 242, 189, .58); stroke-width: 1.25; stroke-dasharray: 4 7; opacity: 0; }
-    .road-flow.active { opacity: 1; animation: roadMove 1.4s linear infinite; }
-    @keyframes roadMove { to { stroke-dashoffset: -22; } }
-    .town-plaza {
-      position: absolute; left: 50%; top: 45%; z-index: 2; transform: translate(-50%,-50%);
-      width: 128px; height: 92px; border: 1px solid #4d7566; border-radius: 50%;
-      background: radial-gradient(circle, #19382d 0 28%, #132a22 29% 58%, #10231c 59%);
-      box-shadow: 0 10px 32px rgba(0,0,0,.3), inset 0 1px rgba(255,255,255,.08);
-      color: var(--green); text-align: center; font: 700 10px/1.35 ui-monospace, monospace;
-    }
-    .town-plaza span { display: block; margin-top: 29px; }
-    .building {
-      position: absolute; z-index: 2; width: clamp(100px, 10vw, 140px); min-height: 75px;
-      transform: translate(-50%, -50%); border: 1px solid #314a41; border-radius: 8px;
-      padding: 11px 10px 9px; color: var(--text); background:
-        linear-gradient(145deg, rgba(32, 62, 51, .98), rgba(15, 34, 28, .98));
-      text-align: left; box-shadow: 0 12px 24px rgba(0,0,0,.24), inset 0 1px rgba(255,255,255,.06);
-      transition: border-color .25s, transform .25s, filter .25s;
-    }
-    .building::before {
-      content: ""; position: absolute; left: 9px; right: 9px; top: -9px; height: 13px;
-      background: #274b3d; border: 1px solid #3e6857; transform: skewX(-22deg);
-      box-shadow: inset 0 2px rgba(255,255,255,.04);
-    }
-    .building:hover, .building.selected { border-color: #5b9b83; transform: translate(-50%,-53%); }
-    .building.running { filter: drop-shadow(0 0 13px rgba(124,242,189,.24)); }
-    .building.disabled { opacity: .42; filter: grayscale(.75); }
-    .building-icon { font-size: 20px; display: block; margin-bottom: 5px; }
-    .building-name { display: block; font-size: 12px; font-weight: 700; }
-    .building-role { display: block; margin-top: 3px; color: var(--muted); font: 9px ui-monospace, monospace; }
-    .town-agent {
-      position: absolute; z-index: 5; transform: translate(-50%,-50%);
-      transition: left 1.1s cubic-bezier(.2,.8,.2,1), top 1.1s cubic-bezier(.2,.8,.2,1);
-      pointer-events: none;
-    }
-    .sprite {
-      position: relative; display: grid; place-items: center; width: 32px; height: 36px;
-      border: 2px solid #07100e; border-radius: 12px 12px 9px 9px;
-      background: linear-gradient(180deg, #a6f5d2 0 40%, #277458 41%);
-      color: #092218; font: 800 9px ui-monospace, monospace;
-      box-shadow: 0 5px 0 rgba(0,0,0,.24), 0 0 0 1px #5a9d84;
-    }
-    .sprite::before {
-      content: ""; position: absolute; top: -8px; left: 6px; width: 16px; height: 11px;
-      border: 2px solid #07100e; border-radius: 50% 50% 40% 40%; background: #c7f9e2;
-    }
-    .town-agent.running .sprite { animation: spriteBob .65s steps(2,end) infinite; box-shadow: 0 5px 0 rgba(0,0,0,.24), 0 0 16px var(--green); }
-    .town-agent.ok .sprite { background: linear-gradient(180deg, #c8dcff 0 40%, #3b70a7 41%); }
-    .town-agent.error .sprite, .town-agent.timeout .sprite { background: linear-gradient(180deg, #ffc2bc 0 40%, #9b4038 41%); }
-    .town-agent.disabled { opacity: .34; filter: grayscale(1); }
-    @keyframes spriteBob { 50% { transform: translateY(-4px); } }
-    .sprite-name {
-      position: absolute; top: 42px; left: 50%; transform: translateX(-50%); white-space: nowrap;
-      padding: 3px 5px; border-radius: 4px; background: rgba(4, 12, 9, .82);
-      color: #dce9e4; font: 9px ui-monospace, monospace;
-    }
-    .speech {
-      display: none; position: absolute; left: 38px; top: -27px; width: 168px;
-      padding: 7px 9px; border: 1px solid #47685d; border-radius: 8px; background: rgba(8, 20, 16, .96);
-      color: #c8d7d2; font: 10px/1.45 system-ui, sans-serif; box-shadow: 0 10px 24px rgba(0,0,0,.28);
-    }
-    .town-agent.running .speech, .town-agent.selected .speech { display: block; }
-    .town-detail {
-      min-height: 50px; display: grid; grid-template-columns: auto minmax(0,1fr) auto;
-      gap: 14px; align-items: center; padding: 12px 17px; border-top: 1px solid var(--line);
-      color: var(--muted); font-size: 12px;
-    }
-    .town-detail strong { color: var(--text); white-space: nowrap; }
-    .town-detail code { color: var(--green); }
-    .town-ledger {
-      display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line);
-      background: rgba(7, 16, 14, .72);
-    }
-    .town-ledger article { min-height: 210px; padding: 16px 18px; }
-    .town-ledger article + article { border-left: 1px solid var(--line); }
-    .town-ledger h3 {
-      margin: 0 0 12px; color: var(--text); font-size: 12px;
-      letter-spacing: .08em; text-transform: uppercase;
-    }
-    .town-stream { display: grid; gap: 8px; }
-    .town-entry {
-      display: grid; grid-template-columns: 62px 92px minmax(0, 1fr); gap: 9px;
-      align-items: start; padding: 7px 0; border-bottom: 1px solid rgba(38,58,52,.6);
-      color: #b8c8c2; font-size: 11px; line-height: 1.45;
-    }
-    .town-entry:last-child { border-bottom: 0; }
-    .town-entry time, .town-entry code { color: var(--muted); font: 9px ui-monospace, monospace; }
-    .town-entry code { color: var(--green); overflow-wrap: anywhere; }
-    .town-memory-head {
-      display: flex; align-items: center; justify-content: space-between; gap: 10px;
-      margin-bottom: 10px;
-    }
-    .town-memory-head h3 { margin: 0; }
-    .town-memory-head span { color: var(--muted); font: 10px ui-monospace, monospace; }
-    .town-schedule {
-      display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; padding: 0; list-style: none;
-    }
-    .town-schedule li {
-      padding: 5px 7px; border: 1px solid #30483f; border-radius: 6px;
-      color: #aebfb9; background: #0b1713; font-size: 10px;
-    }
-    .town-schedule li::before { content: "◇"; margin-right: 5px; color: var(--green); }
-    .town-memory-empty { color: var(--muted); font-size: 11px; padding: 18px 0; }
-    .town-reflection {
-      display: none; margin: 0 0 12px; padding: 9px 10px; border-left: 2px solid var(--amber);
-      color: #d7c8a6; background: rgba(245,200,115,.06); font-size: 10px; line-height: 1.55;
-    }
-    .town-task-summary {
-      display: none; margin: 0 0 12px; padding: 10px; border: 1px solid #30483f;
-      border-radius: 8px; background: #0a1511; color: #bfd1ca; font-size: 10px;
-      line-height: 1.55;
-    }
-    .town-task-summary strong { display: block; color: var(--green); margin-bottom: 4px; }
-    .pipeline {
-      display: grid; grid-template-columns: repeat(5, 1fr); gap: 0;
-      border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
-      background: var(--panel);
-    }
-    .phase { position: relative; padding: 17px 20px; border-right: 1px solid var(--line); }
-    .phase:last-child { border-right: 0; }
-    .phase .step { color: var(--muted); font: 11px ui-monospace, monospace; }
-    .phase strong { display: block; margin-top: 5px; font-size: 14px; }
-    .phase::after {
-      content: ""; position: absolute; left: 0; right: 100%; bottom: 0; height: 3px;
-      background: var(--green); transition: right .35s ease;
-    }
-    .phase.done::after, .phase.active::after { right: 0; }
-    .phase.active { background: rgba(124, 242, 189, .05); }
-    .phase.active strong { color: var(--green); }
-    .phase.active::before {
-      content: ""; position: absolute; top: 18px; right: 18px; width: 7px; height: 7px;
-      border-radius: 50%; background: var(--green); animation: pulse 1.2s infinite;
-    }
-    @keyframes pulse { 50% { opacity: .25; transform: scale(.75); } }
-    .task-board {
-      border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
-      background: var(--panel); box-shadow: var(--shadow);
-    }
-    .task-board-head {
-      display: grid; grid-template-columns: minmax(0,1fr) minmax(220px,.55fr);
-      gap: 20px; align-items: center; padding: 18px 20px; border-bottom: 1px solid var(--line);
-    }
-    .task-board-head strong { display: block; font-size: 15px; }
-    .task-board-head span { color: var(--muted); font-size: 11px; line-height: 1.5; }
-    .task-progress-track {
-      height: 8px; overflow: hidden; border-radius: 999px; background: #07100e;
-      border: 1px solid #283d35;
-    }
-    .task-progress-bar {
-      width: 0; height: 100%; border-radius: inherit;
-      background: linear-gradient(90deg, var(--green-2), var(--green));
-      transition: width .35s ease;
-    }
-    .task-progress-label {
-      display: flex; justify-content: space-between; margin-bottom: 7px;
-      color: var(--muted); font: 10px ui-monospace, monospace;
-    }
-    .task-lanes {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-      align-items: start; gap: 0; overflow-x: auto;
-    }
-    .task-lane { min-width: 210px; padding: 15px; border-right: 1px solid var(--line); }
-    .task-lane:last-child { border-right: 0; }
-    .task-lane h3 {
-      margin: 0 0 12px; color: var(--muted); font: 700 10px ui-monospace, monospace;
-      letter-spacing: .12em; text-transform: uppercase;
-    }
-    .task-card {
-      margin-bottom: 10px; padding: 12px; border: 1px solid #2b4239;
-      border-radius: 10px; background: #0a1511;
-    }
-    .task-card.running { border-color: #4a8b74; box-shadow: 0 0 18px rgba(124,242,189,.08); }
-    .task-card.completed { border-color: rgba(130,185,255,.45); }
-    .task-card.error, .task-card.timeout { border-color: rgba(255,136,124,.55); }
-    .task-card.blocked { opacity: .68; }
-    .task-card-head { display: flex; justify-content: space-between; gap: 8px; align-items: start; }
-    .task-card h4 { margin: 0; font-size: 12px; line-height: 1.45; }
-    .task-card p { margin: 9px 0; color: #aebfb9; font-size: 10px; line-height: 1.55; }
-    .task-deps { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
-    .task-deps code {
-      padding: 3px 5px; border-radius: 5px; background: #13231d;
-      color: var(--amber); font: 9px ui-monospace, monospace;
-    }
-    .task-criteria { margin: 8px 0 0; padding-left: 15px; color: var(--muted); font-size: 9px; line-height: 1.55; }
-    .task-card footer {
-      display: flex; justify-content: space-between; gap: 8px; margin-top: 10px;
-      color: var(--muted); font: 9px ui-monospace, monospace;
-    }
-    .mini-progress { height: 3px; margin-top: 8px; background: #1b2a25; }
-    .mini-progress i { display: block; height: 100%; background: var(--green); }
-    .agents {
-      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px;
-    }
-    .agent {
-      min-height: 222px; padding: 18px; display: flex; flex-direction: column;
-      border: 1px solid var(--line); border-radius: 16px; background: var(--panel);
-      transition: transform .2s, border-color .2s, background .2s;
-    }
-    .agent.running {
-      border-color: #4a8b74; background: linear-gradient(145deg, #12271f, var(--panel));
-      transform: translateY(-2px);
-    }
-    .agent.error, .agent.timeout { border-color: rgba(255, 136, 124, .55); }
-    .agent-top { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
-    .agent-index {
-      color: #577068; font: 11px ui-monospace, monospace; letter-spacing: .08em;
-    }
-    .pill {
-      padding: 5px 8px; border-radius: 999px; background: #172722; color: var(--muted);
-      font: 10px ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em;
-    }
-    .pill.running { background: rgba(124,242,189,.1); color: var(--green); }
-    .pill.ok, .pill.completed { color: var(--green); }
-    .pill.error, .pill.timeout { color: var(--red); background: rgba(255,136,124,.1); }
-    .pill.disabled { color: #72827c; }
-    .agent h3 { margin: 24px 0 4px; font-size: 17px; letter-spacing: -.02em; }
-    .role-id { color: var(--muted); font: 11px ui-monospace, monospace; }
-    .agent-output {
-      flex: 1; margin: 18px 0 14px; color: #b8c8c2; font-size: 12px; line-height: 1.65;
-      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
-    }
-    .agent-meta {
-      display: flex; justify-content: space-between; gap: 8px; padding-top: 12px;
-      border-top: 1px solid var(--line); color: var(--muted); font: 10px ui-monospace, monospace;
-    }
-    .agent-model-config {
-      display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 6px; margin-bottom: 10px;
-    }
-    .agent-model-config input { min-width: 0; margin: 0; padding: 7px 8px; font-size: 9px; }
-    .agent-model-config button { padding: 7px 8px; }
-    .workbench { display: grid; grid-template-columns: .8fr 1.2fr; gap: 14px; }
-    .panel { border: 1px solid var(--line); border-radius: 16px; background: var(--panel); padding: 20px; }
-    .panel h3 { margin: 0 0 17px; font-size: 15px; }
-    textarea, input, select {
-      width: 100%; color: var(--text); background: #09130f; border: 1px solid var(--line);
-      border-radius: 10px; padding: 12px; outline: 0; margin: 0 0 10px;
-    }
-    textarea:focus, input:focus, select:focus { border-color: #4b7e6d; }
-    textarea { min-height: 116px; resize: vertical; line-height: 1.55; }
-    .controls { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
-    .primary {
-      border: 0; border-radius: 10px; padding: 12px 18px; color: #03100b;
-      background: var(--green); font-weight: 800; min-width: 150px;
-    }
-    .primary:disabled { opacity: .55; cursor: wait; }
-    .secondary {
-      border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px;
-      color: var(--muted); background: #0a1511; font-size: 11px;
-    }
-    .secondary:hover { color: var(--text); border-color: #4b7e6d; }
-    .check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin-top: 7px; }
-    .check input { width: auto; margin: 0; accent-color: var(--green-2); }
-    pre {
-      margin: 0; max-height: 308px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
-      color: #b9cbc4; font: 11px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace;
-    }
-    table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th { color: var(--muted); font-weight: 500; text-align: left; }
-    th, td { padding: 12px 9px; border-bottom: 1px solid var(--line); }
-    td.mono { font-family: ui-monospace, monospace; }
-    details { margin-top: 14px; }
-    summary { color: var(--muted); cursor: pointer; font-size: 12px; }
-    .role-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
-    .role-form textarea, .role-form .wide, .role-form button { grid-column: 1 / -1; }
-    .empty { color: var(--muted); padding: 24px 0; text-align: center; }
-    @media (max-width: 1050px) {
-      .hero, .workbench { grid-template-columns: 1fr; }
-      .run-summary { border-left: 0; border-top: 1px solid var(--line); padding: 22px 0 0; }
-      .agents { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .metrics { grid-template-columns: repeat(3, 1fr); }
-      .metric { border-bottom: 1px solid var(--line); }
-    }
-    @media (max-width: 650px) {
-      .topbar, .section-head { align-items: flex-start; flex-direction: column; }
-      .metrics, .pipeline, .agents { grid-template-columns: 1fr; }
-      .metric, .phase { border-right: 0; border-bottom: 1px solid var(--line); }
-      .controls, .role-form { grid-template-columns: 1fr; }
-      .role-form > * { grid-column: 1; }
-      .town-toolbar, .town-detail { align-items: flex-start; grid-template-columns: 1fr; }
-      .town-tools, .town-replay { align-items: flex-start; justify-content: flex-start; }
-      .town-replay { flex-wrap: wrap; }
-      .town-ledger { grid-template-columns: 1fr; }
-      .town-ledger article + article { border-left: 0; border-top: 1px solid var(--line); }
-      .town-entry { grid-template-columns: 54px 78px minmax(0, 1fr); }
-      .town-map { min-height: 720px; }
-      .building { width: 108px; }
-      .speech { width: 125px; }
-      .task-board-head { grid-template-columns: 1fr; }
-    }
-  </style>
+  <title>Job Agent Studio · Agent Town</title>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<main class="shell">
-  <header class="topbar">
-    <div class="brand">
-      <div class="mark">JA</div>
-      <div><p class="eyebrow">2027 campus recruiting</p><strong>Job Agent Studio</strong></div>
-    </div>
+<aside class="sidebar">
+  <div class="brand">
+    <div class="mark">JA</div>
+    <div><p class="eyebrow">2027 campus recruiting</p><strong>Job Agent Studio</strong></div>
+  </div>
+  <nav class="nav" id="nav">
+    <button type="button" class="nav-item active" data-page="town"><i>🏘️</i>小镇</button>
+    <button type="button" class="nav-item" data-page="graph"><i>🔀</i>路由与任务图</button>
+    <button type="button" class="nav-item" data-page="roles"><i>🧑‍💻</i>角色与模型</button>
+    <button type="button" class="nav-item" data-page="memory"><i>🧠</i>记忆与反思</button>
+    <button type="button" class="nav-item" data-page="patrol"><i>🛰️</i>常驻巡检</button>
+    <button type="button" class="nav-item" data-page="replay"><i>⏪</i>运行回放</button>
+  </nav>
+  <div class="sidebar-foot">
     <div class="statusline"><i class="live-dot"></i><span id="runtime-name">连接 Runtime…</span></div>
-  </header>
+    <p class="sidebar-note">飞书是独立角色入口，LangGraph 是协作骨架。页面画的每条线都对应一条真实运行事件。</p>
+  </div>
+</aside>
 
-  <section class="hero">
-    <div>
-      <p class="eyebrow">LangGraph multi-agent observability</p>
-      <h1>看见每个 Agent<br>正在做什么。</h1>
-      <p class="lede">飞书是独立角色入口，LangGraph 是协作骨架。岗位、JD、知识、简历、作品和面试 Agent 分阶段并行，Judge 在最后检查证据与冲突。</p>
-    </div>
+<main class="main">
+  <header class="main-head">
     <div class="run-summary">
       <span class="run-label" id="run-id">NO RUN YET</span>
       <strong class="run-state" id="run-state">等待任务</strong>
-      <span class="run-query" id="run-query">从飞书 @角色，或在下方启动一次团队任务。</span>
+      <span class="run-query" id="run-query">从飞书 @角色，或用右下角聊天窗启动一次团队任务。</span>
     </div>
-  </section>
+    <div class="metrics">
+      <div class="metric"><span>当前阶段</span><strong id="m-phase">IDLE</strong></div>
+      <div class="metric"><span>已完成任务</span><strong id="m-complete">0 / 7</strong></div>
+      <div class="metric"><span>模型调用</span><strong id="m-calls">0</strong></div>
+      <div class="metric"><span>端到端延迟</span><strong id="m-latency">—</strong></div>
+      <div class="metric"><span>并行加速估算</span><strong id="m-speedup">—</strong></div>
+    </div>
+  </header>
 
-  <section class="metrics">
-    <div class="metric"><span>当前阶段</span><strong id="m-phase">IDLE</strong></div>
-    <div class="metric"><span>已完成任务</span><strong id="m-complete">0 / 7</strong></div>
-    <div class="metric"><span>模型调用</span><strong id="m-calls">0</strong></div>
-    <div class="metric"><span>端到端延迟</span><strong id="m-latency">—</strong></div>
-    <div class="metric"><span>并行加速估算</span><strong id="m-speedup">—</strong></div>
-  </section>
-
-  <div class="section-head">
-    <div><p class="eyebrow">agent town · live simulation</p><h2>求职 Agent 小镇</h2></div>
-    <p>点击建筑查看角色；精灵位置与对话来自真实 LangGraph 运行事件。</p>
-  </div>
-  <section class="town-shell">
-    <div class="town-toolbar">
-      <strong>JOB SEARCH TOWN / <span id="town-clock">RUNTIME VIEW</span></strong>
-      <div class="town-tools">
-        <div class="town-replay">
-          <select id="town-run-select" onchange="selectTownRun(this.value)">
-            <option value="">LIVE · 实时小镇</option>
-          </select>
-          <input id="town-replay-slider" type="range" min="1" max="1" value="1"
-            aria-label="回放时间步" disabled onchange="selectTownStep(this.value)">
-          <span class="town-replay-step" id="town-replay-step">LIVE</span>
-          <button id="town-live-button" type="button" disabled onclick="returnToLiveTown()">回到实时</button>
-        </div>
+  <div class="pages">
+    <!-- ── 小镇 ───────────────────────────────────────────── -->
+    <section class="page page-town active" data-page="town">
+      <div class="town-canvas" id="town-canvas"></div>
+      <div class="town-hud town-hud-top">
+        <strong>JOB SEARCH TOWN / <span id="town-clock">RUNTIME VIEW</span></strong>
         <div class="town-legend">
           <span><i class="legend-dot"></i>待命</span>
           <span><i class="legend-dot running"></i>工作中</span>
           <span><i class="legend-dot done"></i>已完成</span>
+          <span><i class="legend-dot" style="background:var(--green)"></i>分派</span>
+          <span><i class="legend-dot done"></i>交接</span>
+          <span><i class="legend-dot" style="background:var(--amber)"></i>送审</span>
         </div>
       </div>
-    </div>
-    <div class="town-map" id="town-map">
-      <svg class="town-roads" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-        <path class="road-base" d="M50 45 L13 20 M50 45 L33 17 M50 45 L76 20 M50 45 L16 68 M50 45 L39 72 M50 45 L70 70 M50 45 L86 50"/>
-        <path class="road-flow" data-phase="discovery" d="M50 45 L13 20"/>
-        <path class="road-flow" data-phase="analysis" d="M50 45 L33 17 M50 45 L76 20"/>
-        <path class="road-flow" data-phase="action" d="M50 45 L16 68 M50 45 L39 72 M50 45 L70 70"/>
-        <path class="road-flow" data-phase="judge" d="M50 45 L86 50"/>
-      </svg>
-      <div class="town-plaza"><span>LANGGRAPH<br>PLAZA</span></div>
-      <div id="town-buildings"></div>
-      <div id="town-agents"></div>
-    </div>
-    <div class="town-detail" id="town-detail">
-      <strong>小镇待命</strong>
-      <span>从飞书 @ 任一角色，或在下方启动团队任务。</span>
-      <code>idle</code>
-    </div>
-    <div class="town-ledger">
-      <article>
-        <h3>小镇时间线 · Town Timeline</h3>
-        <div class="town-stream" id="town-timeline">
-          <div class="town-memory-empty">还没有运行事件。</div>
-        </div>
-      </article>
-      <article>
-        <div class="town-memory-head">
-          <h3>角色任务、日程与记忆流</h3>
-          <span id="town-memory-role">—</span>
-        </div>
-        <div class="town-task-summary" id="town-task-summary"></div>
-        <ul class="town-schedule" id="town-schedule"></ul>
-        <div class="town-reflection" id="town-reflection"></div>
-        <div class="town-stream" id="town-memory">
-          <div class="town-memory-empty">点击一座建筑查看角色记忆。</div>
-        </div>
-      </article>
-    </div>
-  </section>
-
-  <div class="section-head">
-    <div><p class="eyebrow">execution graph</p><h2>运行阶段</h2></div>
-    <p>岗位发现先行；JD 与知识并行分析；行动 Agent 在依赖满足后并行。</p>
-  </div>
-  <section class="pipeline" id="pipeline">
-    <div class="phase" data-phase="route"><span class="step">01 / ROUTE</span><strong>选择角色</strong></div>
-    <div class="phase" data-phase="discovery"><span class="step">02 / DISCOVER</span><strong>发现与核验岗位</strong></div>
-    <div class="phase" data-phase="analysis"><span class="step">03 / ANALYZE</span><strong>JD 与知识并行</strong></div>
-    <div class="phase" data-phase="action"><span class="step">04 / ACT</span><strong>简历/作品/面试</strong></div>
-    <div class="phase" data-phase="judge"><span class="step">05 / JUDGE</span><strong>证据审核</strong></div>
-  </section>
-
-  <div class="section-head">
-    <div><p class="eyebrow">task dependency graph</p><h2>任务拆解、依赖与进度</h2></div>
-    <p>每个节点来自真实运行任务图；不是根据角色状态临时拼出来的动画。</p>
-  </div>
-  <section class="task-board">
-    <div class="task-board-head">
-      <div>
-        <strong id="task-graph-title">等待任务图</strong>
-        <span id="task-graph-query">启动一次团队任务或等待每日求职日报。</span>
+      <div class="town-hud town-hud-hint">拖拽平移 · 滚轮缩放 · 点建筑看角色</div>
+      <div class="town-hud town-hud-bottom" id="town-detail">
+        <strong>小镇待命</strong>
+        <span>从飞书 @ 任一角色，或用右下角聊天窗启动团队任务。</span>
+        <code>idle</code>
       </div>
-      <div>
-        <div class="task-progress-label"><span id="task-graph-status">QUEUED</span><span id="task-graph-progress-label">0%</span></div>
-        <div class="task-progress-track"><div class="task-progress-bar" id="task-graph-progress"></div></div>
-      </div>
-    </div>
-    <div class="task-lanes" id="task-lanes">
-      <div class="empty">还没有任务依赖图。</div>
-    </div>
-  </section>
+    </section>
 
-  <div class="section-head">
-    <div><p class="eyebrow">live agents</p><h2>角色工作台</h2></div>
-    <p id="agent-caption">读取角色注册表…</p>
-  </div>
-  <section class="agents" id="agents"></section>
-
-  <div class="section-head">
-    <div><p class="eyebrow">control & evidence</p><h2>运行与审计</h2></div>
-    <p>运行轨迹持久化到本地 Runtime，不记录 API Key。</p>
-  </div>
-  <section class="workbench">
-    <article class="panel">
-      <h3>启动一次团队任务</h3>
-      <textarea id="query">分析目标 AI Agent 岗位，并给出 JD 缺口、简历、作品和面试准备建议</textarea>
-      <div class="controls">
-        <select id="mode">
-          <option value="collaborative">collaborative · 依赖式协作</option>
-          <option value="parallel">parallel · 全并行</option>
-          <option value="sequential">sequential · 顺序对照</option>
-          <option value="single">single · 单角色</option>
-        </select>
-        <button class="primary" id="run-button" onclick="runAgents()">运行团队</button>
+    <!-- ── 路由与任务图 ───────────────────────────────────── -->
+    <section class="page" data-page="graph">
+      <div class="section-head">
+        <div><p class="eyebrow">execution graph</p><h2>运行阶段</h2></div>
+        <p>岗位发现先行；JD 与知识并行分析；行动 Agent 在依赖满足后并行。</p>
       </div>
-      <label class="check"><input type="checkbox" id="all-roles" checked>显式选择全部 6 个工作角色，再交给 Judge</label>
-      <details>
-        <summary>一键添加逻辑角色</summary>
+      <section class="pipeline" id="pipeline">
+        <div class="phase" data-phase="route"><span class="step">01 / ROUTE</span><strong>选择角色</strong></div>
+        <div class="phase" data-phase="discovery"><span class="step">02 / DISCOVER</span><strong>发现与核验岗位</strong></div>
+        <div class="phase" data-phase="analysis"><span class="step">03 / ANALYZE</span><strong>JD 与知识并行</strong></div>
+        <div class="phase" data-phase="action"><span class="step">04 / ACT</span><strong>简历/作品/面试</strong></div>
+        <div class="phase" data-phase="judge"><span class="step">05 / JUDGE</span><strong>证据审核</strong></div>
+      </section>
+      <details class="graph-source">
+        <summary>LangGraph 图定义（来自运行中的编排器，不是手写图）</summary>
+        <pre id="graph-mermaid">读取 /api/runtime…</pre>
+      </details>
+
+      <div class="section-head">
+        <div><p class="eyebrow">routing</p><h2>路由与交接</h2></div>
+        <p id="town-routing-count">0 条</p>
+      </div>
+      <section class="panel">
+        <div class="town-stream" id="town-routing">
+          <div class="town-memory-empty">还没有真实发生的路由。</div>
+        </div>
+      </section>
+
+      <div class="section-head">
+        <div><p class="eyebrow">task dependency graph</p><h2>任务拆解、依赖与进度</h2></div>
+        <p>每个节点来自真实运行任务图；不是根据角色状态临时拼出来的动画。</p>
+      </div>
+      <section class="task-board">
+        <div class="task-board-head">
+          <div>
+            <strong id="task-graph-title">等待任务图</strong>
+            <span id="task-graph-query">启动一次团队任务或等待每日求职日报。</span>
+          </div>
+          <div>
+            <div class="task-progress-label"><span id="task-graph-status">QUEUED</span><span id="task-graph-progress-label">0%</span></div>
+            <div class="task-progress-track"><div class="task-progress-bar" id="task-graph-progress"></div></div>
+          </div>
+        </div>
+        <div class="task-lanes" id="task-lanes">
+          <div class="empty">还没有任务依赖图。</div>
+        </div>
+      </section>
+    </section>
+
+    <!-- ── 角色与模型 ─────────────────────────────────────── -->
+    <section class="page" data-page="roles">
+      <div class="section-head">
+        <div><p class="eyebrow">live agents</p><h2>角色工作台</h2></div>
+        <p id="agent-caption">读取角色注册表…</p>
+      </div>
+      <section class="agents" id="agents"></section>
+
+      <div class="section-head">
+        <div><p class="eyebrow">registry</p><h2>添加逻辑角色</h2></div>
+        <p>写入 registry 后立刻参与路由，不需要重启服务。</p>
+      </div>
+      <section class="panel">
         <div class="role-form">
           <select id="role-template" class="wide">
             <option value="">选择角色模板（可一键创建）</option>
@@ -593,7 +134,7 @@
             <option value="data_science_coach">数据科学教练</option>
             <option value="agent_eval_engineer">Agent 评测工程师</option>
           </select>
-          <button class="secondary wide" onclick="addRoleFromTemplate()">从模板立即创建并启用</button>
+          <button class="secondary wide" id="btn-add-template">从模板立即创建并启用</button>
           <input id="role-id" placeholder="role_id">
           <input id="role-name" placeholder="显示名称">
           <input id="role-goal" class="wide" placeholder="角色目标">
@@ -607,615 +148,132 @@
           <input id="role-icon" placeholder="建筑图标，如 🧬">
           <input id="role-schedule" placeholder="日程，逗号分隔">
           <input id="role-model" class="wide" list="model-options" placeholder="可选：直接指定模型 ID；留空使用 profile">
-          <button class="primary" onclick="addRole()">添加并启用</button>
+          <button class="primary" id="btn-add-role">添加并启用</button>
         </div>
-      </details>
-    </article>
-    <article class="panel">
-      <h3>最近输出</h3>
-      <pre id="output">还没有运行结果。</pre>
-    </article>
-  </section>
+      </section>
+    </section>
 
-  <div class="section-head">
-    <div><p class="eyebrow">recent traces</p><h2>历史运行</h2></div>
-    <p>用于性能对照、失败定位和演示。</p>
-  </div>
-  <section class="panel" style="overflow:auto">
-    <table>
-      <thead><tr><th>RUN</th><th>编排器</th><th>模式</th><th>状态</th><th>Agent</th><th>延迟</th><th>任务</th></tr></thead>
-      <tbody id="runs"><tr><td colspan="7" class="empty">暂无轨迹</td></tr></tbody>
-    </table>
-  </section>
-</main>
-<datalist id="model-options"></datalist>
-<script>
-const state = {
-  roles: [],
-  events: [],
-  runtime: {},
-  town: {},
-  models: {profiles: {}, roles: [], catalog: []},
-  modelCatalogLoaded: false,
-  requestPending: false,
-  replay: {runId: '', step: 0}
-};
-const phaseOrder = ['route', 'discovery', 'analysis', 'action', 'judge'];
-const townLayout = {
-  job_scout: {x: 13, y: 20, icon: '📡', place: '机会驿站'},
-  jd_analyst: {x: 33, y: 17, icon: '🔎', place: 'JD 研究所'},
-  job_knowledge_curator: {x: 76, y: 20, icon: '📚', place: '知识图书馆'},
-  resume_strategist: {x: 16, y: 68, icon: '📝', place: '简历工坊'},
-  portfolio_coach: {x: 39, y: 72, icon: '🛠️', place: '作品车库'},
-  interview_coach: {x: 70, y: 70, icon: '🎙️', place: '面试竞技场'},
-  judge: {x: 86, y: 50, icon: '⚖️', place: '证据审判塔'}
-};
-let selectedTownRole = null;
-const $ = selector => document.querySelector(selector);
-const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
-  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-}[char]));
-const short = (value, size=160) => value && value.length > size ? value.slice(0, size - 1) + '…' : (value || '');
-const fmtMs = ms => ms == null ? '—' : ms >= 1000 ? `${(ms/1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
-const fmtTownTime = value => {
-  if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString('zh-CN', {hour12:false});
-};
-
-function groupRuns(events) {
-  const runs = new Map();
-  for (const event of events) {
-    if (!runs.has(event.run_id)) runs.set(event.run_id, []);
-    runs.get(event.run_id).push(event);
-  }
-  return [...runs.entries()].map(([id, values]) => {
-    values.sort((a,b) => a.timestamp.localeCompare(b.timestamp));
-    return { id, events: values, first: values[0], last: values.at(-1) };
-  }).sort((a,b) => b.last.timestamp.localeCompare(a.last.timestamp));
-}
-
-function runForDisplay(runs) {
-  const source = state.replay.runId
-    ? runs.find(run => run.id === state.replay.runId)
-    : runs[0];
-  if (!source || !state.replay.runId) return source;
-  const step = Math.max(
-    1,
-    Math.min(
-      state.town.replay?.step || state.replay.step || source.events.length,
-      source.events.length
-    )
-  );
-  const events = source.events.slice(0, step);
-  return {
-    ...source,
-    events,
-    first: events[0],
-    last: events.at(-1)
-  };
-}
-
-function renderReplayControls(runs) {
-  const select = $('#town-run-select');
-  const selectedExists = runs.some(run => run.id === state.replay.runId);
-  if (state.replay.runId && !selectedExists) {
-    state.replay.runId = '';
-    state.replay.step = 0;
-  }
-  select.innerHTML = '<option value="">LIVE · 实时小镇</option>' + runs.slice(0, 12).map(run =>
-    `<option value="${escapeHtml(run.id)}">REPLAY · ${escapeHtml(run.id.slice(0, 8))} · ${run.events.length}步</option>`
-  ).join('');
-  select.value = state.replay.runId;
-  const activeRun = runs.find(run => run.id === state.replay.runId);
-  const slider = $('#town-replay-slider');
-  const step = activeRun
-    ? Math.max(1, Math.min(state.town.replay?.step || state.replay.step || activeRun.events.length, activeRun.events.length))
-    : 1;
-  slider.disabled = !activeRun;
-  slider.max = String(activeRun?.events.length || 1);
-  slider.value = String(step);
-  $('#town-replay-step').textContent = activeRun ? `${step}/${activeRun.events.length}` : 'LIVE';
-  $('#town-live-button').disabled = !activeRun;
-}
-
-function roleState(role, run) {
-  if (!role.enabled) return { status: 'disabled', phase: '—', model: '—', latency: null, output: '角色已暂停，不参与自动路由' };
-  if (!run) return { status: 'idle', phase: '—', model: '—', latency: null, output: role.goal };
-  const events = run.events.filter(event =>
-    event.role_id === role.role_id
-    && ['agent_started','agent_completed','daily_push_started','daily_push_completed'].includes(event.kind)
-  );
-  const last = events.at(-1);
-  if (!last) {
-    const selected = run.events.some(event =>
-      (event.selected_role_ids || []).includes(role.role_id)
-    );
-    return { status: selected ? 'queued' : 'idle', phase: '—', model: '—', latency: null, output: role.goal };
-  }
-  return {
-    status: ['agent_started','daily_push_started'].includes(last.kind) ? 'running' : last.status,
-    phase: last.phase,
-    model: last.model || 'pending',
-    latency: last.latency_ms,
-    output: last.output_excerpt || last.error || role.goal
-  };
-}
-
-function layoutFor(role, index) {
-  const fallback = townLayout[role.role_id] || {
-    x: 12 + (index % 4) * 24,
-    y: index < 4 ? 18 : 76,
-    icon: '🏠',
-    place: role.display_name
-  };
-  return {
-    x: role.town_x ?? fallback.x,
-    y: role.town_y ?? fallback.y,
-    icon: role.town_icon || fallback.icon,
-    place: role.town_place || fallback.place
-  };
-}
-
-function activePhase(run) {
-  if (!run) return 'idle';
-  if (run.events.some(event => event.kind === 'run_completed')) return 'completed';
-  const started = run.events.filter(event => event.kind === 'phase_started').at(-1);
-  if (started) return started.phase;
-  return run.events.some(event => event.kind === 'route_completed') ? 'discovery' : 'route';
-}
-
-function resolvedModelFor(role) {
-  return state.models.roles?.find(item => item.role_id === role.role_id)?.resolved_model
-    || role.model
-    || role.model_profile
-    || 'default';
-}
-
-function renderTaskGraph(graph) {
-  if (!graph) {
-    $('#task-graph-title').textContent = '等待任务图';
-    $('#task-graph-query').textContent = '启动一次团队任务或等待每日求职日报。';
-    $('#task-graph-status').textContent = 'QUEUED';
-    $('#task-graph-progress-label').textContent = '0%';
-    $('#task-graph-progress').style.width = '0%';
-    $('#task-lanes').innerHTML = '<div class="empty">还没有任务依赖图。</div>';
-    return;
-  }
-  $('#task-graph-title').textContent = `${graph.title} · ${graph.run_id.slice(0, 8)}`;
-  $('#task-graph-query').textContent = short(graph.query, 220);
-  $('#task-graph-status').textContent = `${String(graph.status).toUpperCase()} · ${graph.source}`;
-  $('#task-graph-progress-label').textContent = `${graph.progress}%`;
-  $('#task-graph-progress').style.width = `${graph.progress}%`;
-  const order = ['delivery', 'discovery', 'analysis', 'action', 'judge'];
-  const labels = {
-    delivery: 'DAILY DELIVERY',
-    discovery: 'DISCOVERY',
-    analysis: 'ANALYSIS',
-    action: 'ACTION',
-    judge: 'JUDGE'
-  };
-  const phases = order.filter(phase => graph.tasks.some(task => task.phase === phase));
-  $('#task-lanes').innerHTML = phases.map(phase => {
-    const tasks = graph.tasks.filter(task => task.phase === phase);
-    return `<article class="task-lane"><h3>${labels[phase] || phase}</h3>${tasks.map(task => {
-      const dependencies = task.depends_on?.length
-        ? `<div class="task-deps"><code>DEPENDS ←</code>${task.depends_on.map(item => `<code>${escapeHtml(item)}</code>`).join('')}</div>`
-        : '<div class="task-deps"><code>NO DEPENDENCY</code></div>';
-      const criteria = (task.acceptance_criteria || []).slice(0, 3).map(item =>
-        `<li>${escapeHtml(item)}</li>`
-      ).join('');
-      return `<section class="task-card ${escapeHtml(task.status)}">
-        <div class="task-card-head"><h4>${escapeHtml(task.title)}</h4><span class="pill ${escapeHtml(task.status)}">${escapeHtml(task.status)}</span></div>
-        <p>${escapeHtml(short(task.description, 180))}</p>
-        ${dependencies}
-        <ul class="task-criteria">${criteria}</ul>
-        <div class="mini-progress"><i style="width:${Number(task.progress) || 0}%"></i></div>
-        <footer><span>${escapeHtml(task.role_id)}</span><span>${escapeHtml(task.model || 'pending')}</span><span>${Number(task.progress) || 0}%</span></footer>
-      </section>`;
-    }).join('')}</article>`;
-  }).join('');
-}
-
-function ensureTownElements() {
-  const buildings = $('#town-buildings');
-  const agents = $('#town-agents');
-  state.roles.forEach((role, index) => {
-    const layout = layoutFor(role, index);
-    let building = buildings.querySelector(`[data-role="${CSS.escape(role.role_id)}"]`);
-    if (!building) {
-      building = document.createElement('button');
-      building.type = 'button';
-      building.className = 'building';
-      building.dataset.role = role.role_id;
-      building.addEventListener('click', () => {
-        selectedTownRole = role.role_id;
-        render();
-      });
-      buildings.appendChild(building);
-    }
-    building.style.left = `${layout.x}%`;
-    building.style.top = `${layout.y}%`;
-    building.innerHTML = `<span class="building-icon">${layout.icon}</span>
-      <span class="building-name">${escapeHtml(layout.place)}</span>
-      <span class="building-role">${escapeHtml(role.display_name)}</span>`;
-
-    let agent = agents.querySelector(`[data-agent="${CSS.escape(role.role_id)}"]`);
-    if (!agent) {
-      agent = document.createElement('div');
-      agent.className = 'town-agent';
-      agent.dataset.agent = role.role_id;
-      agent.innerHTML = `<div class="sprite">${String(index + 1).padStart(2, '0')}</div>
-        <span class="sprite-name"></span><span class="speech"></span>`;
-      agents.appendChild(agent);
-    }
-    agent.querySelector('.sprite-name').textContent = role.display_name;
-  });
-}
-
-function renderTown(run, phase) {
-  ensureTownElements();
-  const activeRole = state.roles.find(role => roleState(role, run).status === 'running');
-  const currentHandoff = state.town.handoffs
-    ?.filter(handoff => handoff.run_id === run?.id)
-    .at(-1);
-  const latestRunRoleId = run?.events.filter(event => event.role_id).at(-1)?.role_id;
-  const focusRoleId = selectedTownRole
-    || activeRole?.role_id
-    || currentHandoff?.target_role_ids?.at(-1)
-    || latestRunRoleId
-    || state.roles[0]?.role_id;
-
-  for (const road of document.querySelectorAll('.road-flow')) {
-    road.classList.toggle('active', road.dataset.phase === phase);
-  }
-
-  state.roles.forEach((role, index) => {
-    const value = roleState(role, run);
-    const layout = layoutFor(role, index);
-    const building = document.querySelector(`.building[data-role="${CSS.escape(role.role_id)}"]`);
-    const agent = document.querySelector(`.town-agent[data-agent="${CSS.escape(role.role_id)}"]`);
-    const selected = role.role_id === focusRoleId;
-    const queuedX = 44 + (index % 4) * 4;
-    const queuedY = 42 + Math.floor(index / 4) * 8;
-    const isQueued = value.status === 'queued';
-    const targetX = isQueued ? queuedX : layout.x + (index % 2 ? 7 : -7);
-    const targetY = isQueued ? queuedY : layout.y + 11;
-
-    building.className = `building ${value.status === 'running' ? 'running' : ''} ${value.status === 'disabled' ? 'disabled' : ''} ${selected ? 'selected' : ''}`.trim();
-    agent.className = `town-agent ${value.status} ${selected ? 'selected' : ''}`;
-    agent.style.left = `${targetX}%`;
-    agent.style.top = `${targetY}%`;
-    agent.querySelector('.speech').textContent =
-      value.status === 'running' ? `正在处理：${short(value.output, 82)}` : short(value.output, 82);
-  });
-
-  const focusRole = state.roles.find(role => role.role_id === focusRoleId);
-  if (!focusRole) return;
-  const focus = roleState(focusRole, run);
-  const townAgent = state.town.agents?.find(agent => agent.role_id === focusRoleId);
-  const place = townAgent?.place || layoutFor(focusRole, state.roles.indexOf(focusRole)).place;
-  const label = ({disabled:'已暂停', idle:'待命', queued:'等待调度', running:'工作中', ok:'已完成', completed:'已完成', error:'失败', timeout:'超时'})[focus.status] || focus.status;
-  $('#town-detail').innerHTML = `<strong>${escapeHtml(place)} · ${escapeHtml(focusRole.display_name)}</strong>
-    <span>${escapeHtml(short(townAgent?.current_action || focus.output, 210))}</span>
-    <code>${escapeHtml(label)} · ${escapeHtml(focus.model)} · ${fmtMs(focus.latency)}</code>`;
-  $('#town-clock').textContent = state.town.town_time || 'RUNTIME VIEW';
-  $('#town-memory-role').textContent = focusRole.role_id;
-  const task = state.town.task_graph?.tasks?.find(item => item.role_id === focusRole.role_id);
-  $('#town-task-summary').style.display = task ? 'block' : 'none';
-  $('#town-task-summary').innerHTML = task
-    ? `<strong>${escapeHtml(task.title)} · ${Number(task.progress) || 0}%</strong>
-       <span>${escapeHtml(short(task.description, 260))}</span>
-       <div class="task-deps">${task.depends_on?.length
-         ? `<code>DEPENDS ←</code>${task.depends_on.map(item => `<code>${escapeHtml(item)}</code>`).join('')}`
-         : '<code>NO DEPENDENCY</code>'}</div>`
-    : '';
-  $('#town-schedule').innerHTML = (townAgent?.schedule || []).map(item =>
-    `<li>${escapeHtml(item)}</li>`
-  ).join('');
-  const reflection = townAgent?.reflection || '';
-  $('#town-reflection').style.display = reflection ? 'block' : 'none';
-  $('#town-reflection').textContent = reflection ? `反思：${reflection}` : '';
-  const memories = townAgent?.memory_stream?.length
-    ? townAgent.memory_stream
-    : (townAgent?.memories || []);
-  $('#town-memory').innerHTML = memories.length ? memories.slice().reverse().map(memory =>
-    `<div class="town-entry"><time>${escapeHtml(fmtTownTime(memory.timestamp))}</time>
-      <code>${escapeHtml(memory.kind)}${memory.importance == null ? '' : ' · ' + memory.importance.toFixed(2)}</code><span>${escapeHtml(short(memory.text, 145))}</span></div>`
-  ).join('') : '<div class="town-memory-empty">该角色还没有形成运行记忆。</div>';
-
-  const timeline = state.town.timeline || [];
-  $('#town-timeline').innerHTML = timeline.length ? timeline.slice(-9).reverse().map(memory =>
-    `<div class="town-entry"><time>${escapeHtml(fmtTownTime(memory.timestamp))}</time>
-      <code>${escapeHtml(memory.phase)}</code><span>${escapeHtml(short(memory.text, 145))}</span></div>`
-  ).join('') : '<div class="town-memory-empty">还没有运行事件。</div>';
-}
-
-function render() {
-  const runs = groupRuns(state.events);
-  renderReplayControls(runs);
-  const current = runForDisplay(runs);
-  const completeEvent = current?.events.findLast(event => event.kind === 'run_completed');
-  const failedEvent = current?.events.findLast(event => event.kind === 'run_failed');
-  const completedAgents = current?.events.filter(event =>
-    ['agent_completed','daily_push_completed'].includes(event.kind)
-  ) || [];
-  const partialFailure = completedAgents.some(event => !['ok','completed'].includes(event.status));
-  const phase = failedEvent ? 'failed' : activePhase(current);
-  const okCount = completedAgents.filter(event => event.status === 'ok').length;
-  const expectedRoleIds = new Set(
-    current?.events.flatMap(event => event.selected_role_ids || []) || []
-  );
-  completedAgents.forEach(event => expectedRoleIds.add(event.role_id));
-  const taskGraph = state.town.task_graph;
-  const completedTasks = taskGraph?.tasks?.filter(task => task.status === 'completed').length || 0;
-  const metrics = completeEvent?.metrics || {};
-  const firstTime = current ? Date.parse(current.first.timestamp) : 0;
-  const lastTime = current ? Date.parse((completeEvent || failedEvent || current.last).timestamp) : 0;
-  const elapsed = current ? lastTime - firstTime : null;
-
-  const runtimeMode = state.replay.runId ? 'replay' : 'live';
-  $('#runtime-name').textContent = `${state.runtime.orchestrator || 'Runtime'} · ${state.roles.length} roles · ${runtimeMode}`;
-  $('#run-id').textContent = current ? `RUN ${current.id.slice(0,8).toUpperCase()}` : 'NO RUN YET';
-  $('#run-state').textContent = state.replay.runId
-    ? `轨迹回放 ${state.town.replay?.step || state.replay.step}/${state.town.replay?.total_steps || current?.events.length || 0}`
-    : failedEvent ? '运行失败' : completeEvent ? (partialFailure ? '运行完成（含失败）' : '运行完成') : current ? 'Agent 正在协作' : '等待任务';
-  $('#run-query').textContent = current?.first.query_excerpt || '从飞书 @角色，或在下方启动一次团队任务。';
-  $('#m-phase').textContent = phase.toUpperCase();
-  $('#m-complete').textContent = taskGraph
-    ? `${completedTasks} / ${taskGraph.tasks.length}`
-    : `${okCount} / ${expectedRoleIds.size || state.roles.filter(role => role.enabled).length}`;
-  $('#m-calls').textContent = metrics.model_calls ?? completedAgents.length;
-  $('#m-latency').textContent = fmtMs(metrics.wall_latency_ms ?? elapsed);
-  $('#m-speedup').textContent = metrics.parallel_speedup_estimate ? `${metrics.parallel_speedup_estimate.toFixed(2)}×` : '—';
-  renderTown(current, phase);
-  renderTaskGraph(taskGraph);
-
-  const touchedPhases = new Set(
-    current?.events
-      .filter(event => event.kind === 'phase_started')
-      .map(event => event.phase) || []
-  );
-  if (current?.events.some(event => event.kind === 'route_completed')) touchedPhases.add('route');
-  for (const element of document.querySelectorAll('.phase')) {
-    element.classList.remove('active', 'done');
-    const target = element.dataset.phase;
-    if (phase === 'completed' && touchedPhases.has(target)) element.classList.add('done');
-    else if (target !== phase && touchedPhases.has(target)) element.classList.add('done');
-    else if (target === phase) element.classList.add('active');
-  }
-
-  $('#agent-caption').textContent = state.replay.runId
-    ? `${state.roles.length} 个逻辑角色 · 历史事件回放`
-    : `${state.roles.length} 个逻辑角色 · 状态每 1.5 秒刷新`;
-  $('#agents').innerHTML = state.roles.map((role, index) => {
-    const value = roleState(role, current);
-    const label = ({disabled:'DISABLED', idle:'IDLE', queued:'QUEUED', running:'RUNNING', ok:'DONE', completed:'DONE', error:'ERROR', timeout:'TIMEOUT'})[value.status] || value.status;
-    return `<article class="agent ${escapeHtml(value.status)}">
-      <div class="agent-top"><span class="agent-index">AGENT ${String(index+1).padStart(2,'0')}</span><span class="pill ${escapeHtml(value.status)}">${escapeHtml(label)}</span></div>
-      <h3>${escapeHtml(role.display_name)}</h3>
-      <span class="role-id">${escapeHtml(role.role_id)}</span>
-      <p class="agent-output">${escapeHtml(short(value.output))}</p>
-      <div class="agent-model-config">
-        <input id="model-${escapeHtml(role.role_id)}" list="model-options" value="${escapeHtml(role.model || '')}" placeholder="${escapeHtml(resolvedModelFor(role))}" aria-label="${escapeHtml(role.display_name)}模型">
-        <button class="secondary" onclick="configureRoleModel('${escapeHtml(role.role_id)}')">应用模型</button>
+    <!-- ── 记忆与反思 ─────────────────────────────────────── -->
+    <section class="page" data-page="memory">
+      <div class="section-head">
+        <div><p class="eyebrow">memory stream</p><h2>角色任务、日程与记忆流</h2></div>
+        <p>在小镇里点一座建筑，这里就是那个角色的记忆。当前角色：<code id="town-memory-role">—</code></p>
       </div>
-      <button class="secondary" onclick="toggleRole('${escapeHtml(role.role_id)}', ${role.enabled ? 'false' : 'true'})">${role.enabled ? '暂停角色' : '启用角色'}</button>
-      <div class="agent-meta"><span>${escapeHtml(value.phase)}</span><span>${escapeHtml(value.model === '—' ? resolvedModelFor(role) : value.model)}</span><span>${fmtMs(value.latency)}</span></div>
-    </article>`;
-  }).join('');
+      <section class="panel">
+        <div class="town-task-summary" id="town-task-summary"></div>
+        <ul class="town-schedule" id="town-schedule"></ul>
+        <div class="town-reflection" id="town-reflection"></div>
+        <div class="town-stream" id="town-memory">
+          <div class="town-memory-empty">点击一座建筑查看角色记忆。</div>
+        </div>
+      </section>
 
-  $('#runs').innerHTML = runs.length ? runs.slice(0, 12).map(run => {
-    const done = run.events.find(event => event.kind === 'run_completed');
-    const fail = run.events.find(event => event.kind === 'run_failed');
-    const agents = run.events.filter(event =>
-      ['agent_completed','daily_push_completed'].includes(event.kind)
-    );
-    const partial = agents.some(event => !['ok','completed'].includes(event.status));
-    const duration = done?.metrics?.wall_latency_ms ?? (Date.parse(run.last.timestamp)-Date.parse(run.first.timestamp));
-    return `<tr>
-      <td class="mono"><button class="secondary" onclick="selectTownRun('${escapeHtml(run.id)}')">${escapeHtml(run.id.slice(0,8))}</button></td>
-      <td>${escapeHtml(run.first.orchestrator)}</td>
-      <td>${escapeHtml(run.first.mode || '—')}</td>
-      <td>${fail ? 'error' : done ? (partial ? 'partial' : 'completed') : 'running'}</td>
-      <td>${agents.length}</td>
-      <td class="mono">${fmtMs(duration)}</td>
-      <td>${escapeHtml(short(run.first.query_excerpt, 70))}</td>
-    </tr>`;
-  }).join('') : '<tr><td colspan="7" class="empty">暂无轨迹</td></tr>';
-}
+      <div class="section-head">
+        <div><p class="eyebrow">town timeline</p><h2>小镇时间线</h2></div>
+        <p>整镇按时间排列的运行事件。</p>
+      </div>
+      <section class="panel">
+        <div class="town-stream" id="town-timeline">
+          <div class="town-memory-empty">还没有运行事件。</div>
+        </div>
+      </section>
+    </section>
 
-async function refresh() {
-  try {
-    const townParams = new URLSearchParams();
-    if (state.replay.runId) {
-      townParams.set('run_id', state.replay.runId);
-      if (state.replay.step) townParams.set('step', String(state.replay.step));
-    }
-    const townUrl = `/api/town${townParams.size ? `?${townParams}` : ''}`;
-    const modelUrl = state.modelCatalogLoaded ? '/api/models' : '/api/models?catalog=true';
-    const [roles, events, runtime, town, models] = await Promise.all([
-      fetch('/api/roles').then(response => response.json()),
-      fetch('/api/activity?limit=1000').then(response => response.json()),
-      fetch('/api/runtime').then(response => response.json()),
-      fetch(townUrl).then(response => {
-        if (!response.ok) throw new Error(`Town ${response.status}`);
-        return response.json();
-      }),
-      fetch(modelUrl).then(response => response.json())
-    ]);
-    state.roles = roles;
-    state.events = events;
-    state.runtime = runtime;
-    state.town = town;
-    state.models = {
-      ...models,
-      catalog: models.catalog?.length ? models.catalog : state.models.catalog
-    };
-    state.modelCatalogLoaded = true;
-    $('#model-options').innerHTML = (state.models.catalog || []).map(model =>
-      `<option value="${escapeHtml(model)}"></option>`
-    ).join('');
-    render();
-  } catch (error) {
-    $('#runtime-name').textContent = `Runtime disconnected · ${error.message}`;
-  }
-}
+    <!-- ── 常驻巡检 ───────────────────────────────────────── -->
+    <section class="page" data-page="patrol">
+      <div class="section-head">
+        <div><p class="eyebrow">always-on shifts</p><h2>常驻巡检班次</h2></div>
+        <p>班次状态从共享事件日志推导，因此 job-agent-watch 在另一个进程里也照样显示。</p>
+      </div>
+      <section class="panel">
+        <div class="town-shift" id="town-shift">
+          <span class="shift-empty">还没有常驻班次记录。</span>
+        </div>
+      </section>
 
-async function selectTownRun(runId) {
-  state.replay.runId = runId;
-  const run = groupRuns(state.events).find(value => value.id === runId);
-  state.replay.step = run?.events.length || 0;
-  await refresh();
-}
+      <div class="section-head">
+        <div><p class="eyebrow">patrol log</p><h2>巡检与日报事件</h2></div>
+        <p>班次卡只有一行汇总，这里是每一轮到底核了什么。</p>
+      </div>
+      <section class="panel">
+        <div class="town-stream" id="patrol-log">
+          <div class="town-memory-empty">还没有巡检事件。</div>
+        </div>
+      </section>
+    </section>
 
-async function selectTownStep(value) {
-  state.replay.step = Number(value);
-  await refresh();
-}
+    <!-- ── 运行回放 ───────────────────────────────────────── -->
+    <section class="page" data-page="replay">
+      <div class="section-head">
+        <div><p class="eyebrow">replay</p><h2>轨迹回放</h2></div>
+        <p>选一次历史运行，拖时间轴，小镇会退回那一步的状态。</p>
+      </div>
+      <section class="panel">
+        <div class="town-replay">
+          <select id="town-run-select">
+            <option value="">LIVE · 实时小镇</option>
+          </select>
+          <input id="town-replay-slider" type="range" min="1" max="1" value="1"
+            aria-label="回放时间步" disabled>
+          <span class="town-replay-step" id="town-replay-step">LIVE</span>
+          <button id="town-live-button" type="button" disabled>回到实时</button>
+        </div>
+      </section>
 
-async function returnToLiveTown() {
-  state.replay.runId = '';
-  state.replay.step = 0;
-  await refresh();
-}
+      <div class="section-head">
+        <div><p class="eyebrow">recent traces</p><h2>历史运行</h2></div>
+        <p>用于性能对照、失败定位和演示。运行轨迹持久化到本地 Runtime，不记录 API Key。</p>
+      </div>
+      <section class="panel scroll-x">
+        <table>
+          <thead><tr><th>RUN</th><th>编排器</th><th>模式</th><th>状态</th><th>Agent</th><th>延迟</th><th>任务</th></tr></thead>
+          <tbody id="runs"><tr><td colspan="7" class="empty">暂无轨迹</td></tr></tbody>
+        </table>
+      </section>
 
-async function runAgents() {
-  if (state.requestPending) return;
-  const button = $('#run-button');
-  const query = $('#query').value.trim();
-  if (!query) return;
-  state.requestPending = true;
-  button.disabled = true;
-  button.textContent = '运行中…';
-  $('#output').textContent = '任务已经进入 LangGraph，实时状态见上方角色卡片。';
-  try {
-    const allRoles = $('#all-roles').checked
-      ? state.roles.filter(role => role.role_id !== 'judge' && role.enabled).map(role => role.role_id)
-      : [];
-    const response = await fetch('/api/runs', {
-      method: 'POST',
-      headers: {'content-type':'application/json'},
-      body: JSON.stringify({
-        query,
-        requested_roles: allRoles,
-        mode: $('#mode').value,
-        use_judge: true
-      })
-    });
-    const report = await response.json();
-    if (!response.ok) throw new Error(JSON.stringify(report));
-    $('#output').textContent = report.final_output || JSON.stringify(report, null, 2);
-  } catch (error) {
-    $('#output').textContent = `运行失败：${error.message}`;
-  } finally {
-    state.requestPending = false;
-    button.disabled = false;
-    button.textContent = '运行团队';
-    await refresh();
-  }
-}
+      <div class="section-head">
+        <div><p class="eyebrow">last output</p><h2>最近输出</h2></div>
+        <p>最后一次 POST /api/runs 的最终产物。</p>
+      </div>
+      <section class="panel">
+        <pre id="output">还没有运行结果。</pre>
+      </section>
+    </section>
+  </div>
+</main>
 
-async function addRole() {
-  const body = {
-    role_id: $('#role-id').value,
-    display_name: $('#role-name').value,
-    goal: $('#role-goal').value,
-    system_prompt: $('#role-prompt').value,
-    trigger_keywords: $('#role-keywords').value.split(',').map(value => value.trim()).filter(Boolean),
-    tools: [],
-    model_profile: 'default',
-    model: $('#role-model').value.trim() || null,
-    workflow_stage: $('#role-stage').value,
-    enabled: true,
-    town_place: $('#role-place').value || null,
-    town_icon: $('#role-icon').value || '🏠',
-    schedule: $('#role-schedule').value.split(',').map(value => value.trim()).filter(Boolean)
-  };
-  return createRole(body);
-}
+<!-- ── 浮动聊天窗 ─────────────────────────────────────────── -->
+<section class="chat" id="chat">
+  <header class="chat-head">
+    <span><i class="live-dot"></i>小镇对话 · LangGraph</span>
+    <button type="button" class="chat-toggle" id="chat-toggle" aria-label="折叠">▾</button>
+  </header>
+  <div class="chat-body" id="chat-body">
+    <div class="chat-empty">还没有对话。输入任务，Plaza 会把它分派给角色。</div>
+  </div>
+  <div class="chat-foot">
+    <select id="mode">
+      <option value="collaborative">collaborative · 依赖式协作</option>
+      <option value="parallel">parallel · 全并行</option>
+      <option value="sequential">sequential · 顺序对照</option>
+      <option value="single">single · 单角色</option>
+    </select>
+    <label class="check"><input type="checkbox" id="all-roles" checked>全部工作角色 + Judge</label>
+    <!-- 图片进 Chief of Staff 的读图环节：粘贴、拖进窗口、或者点 📎 都走同一条路。 -->
+    <div class="chat-attach" id="chat-attach" hidden></div>
+    <div class="chat-input">
+      <textarea id="query" rows="2" placeholder="给小镇一个任务…（可粘贴或拖入截图）">分析目标 AI Agent 岗位，并给出 JD 缺口、简历、作品和面试准备建议</textarea>
+      <div class="chat-actions">
+        <button type="button" class="chat-clip" id="chat-clip" aria-label="添加图片" title="添加图片（最多 9 张）">📎</button>
+        <button class="primary" id="run-button">运行团队</button>
+      </div>
+      <input type="file" id="chat-files" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+    </div>
+  </div>
+</section>
 
-const roleTemplates = {
-  bioinformatics_coach: {
-    role_id:'bioinformatics_coach', display_name:'生信算法教练',
-    goal:'把生信算法岗位要求映射到可验证的项目证据',
-    system_prompt:'围绕生信算法岗位提供知识、项目和面试建议；区分已有证据与待核验推断。',
-    trigger_keywords:['生信','GWAS','单细胞'], tools:['local_docs'], model_profile:'knowledge',
-    workflow_stage:'action', enabled:true, town_place:'生信实验室', town_icon:'🧬',
-    schedule:['解析生信任务','映射分析流程','形成可验证证据']
-  },
-  data_science_coach: {
-    role_id:'data_science_coach', display_name:'数据科学教练',
-    goal:'把数据科学岗位要求转成分析方案和作品证据',
-    system_prompt:'围绕 SQL、统计推断、实验设计和数据产品输出可验证建议，不虚构数据。',
-    trigger_keywords:['数据科学','SQL','AB实验'], tools:['local_docs'], model_profile:'default',
-    workflow_stage:'action', enabled:true, town_place:'数据观测站', town_icon:'📊',
-    schedule:['提炼业务问题','设计分析方法','定义验收指标']
-  },
-  agent_eval_engineer: {
-    role_id:'agent_eval_engineer', display_name:'Agent 评测工程师',
-    goal:'设计 Agent、RAG 与工具调用的可复现评测方案',
-    system_prompt:'输出 golden set、指标、失败分类、回归门禁和成本延迟约束。',
-    trigger_keywords:['Agent评测','RAG评测','golden set'], tools:['local_docs'], model_profile:'reliable',
-    workflow_stage:'action', enabled:true, town_place:'评测控制室', town_icon:'🧪',
-    schedule:['建立样例集','定义指标','执行回归门禁']
-  }
-};
-
-async function addRoleFromTemplate() {
-  const template = roleTemplates[$('#role-template').value];
-  if (!template) {
-    $('#output').textContent = '请先选择一个角色模板。';
-    return;
-  }
-  await createRole(template);
-}
-
-async function createRole(body) {
-  const response = await fetch('/api/roles', {
-    method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body)
-  });
-  const payload = await response.json();
-  if (!response.ok) {
-    $('#output').textContent = `添加角色失败：${JSON.stringify(payload)}`;
-    return;
-  }
-  $('#output').textContent = `角色 ${body.display_name} 已启用，registry version=${payload.registry_version}`;
-  await refresh();
-}
-
-async function toggleRole(roleId, enabled) {
-  const response = await fetch(`/api/roles/${encodeURIComponent(roleId)}`, {
-    method:'PATCH', headers:{'content-type':'application/json'}, body:JSON.stringify({enabled})
-  });
-  const payload = await response.json();
-  if (!response.ok) {
-    $('#output').textContent = `更新角色失败：${JSON.stringify(payload)}`;
-    return;
-  }
-  $('#output').textContent = `${payload.role.display_name} 已${enabled ? '启用' : '暂停'}，registry version=${payload.registry_version}`;
-  await refresh();
-}
-
-async function configureRoleModel(roleId) {
-  const input = document.getElementById(`model-${roleId}`);
-  const model = input?.value.trim() || null;
-  const response = await fetch(`/api/roles/${encodeURIComponent(roleId)}`, {
-    method:'PATCH',
-    headers:{'content-type':'application/json'},
-    body:JSON.stringify({model})
-  });
-  const payload = await response.json();
-  if (!response.ok) {
-    $('#output').textContent = `模型配置失败：${JSON.stringify(payload)}`;
-    return;
-  }
-  $('#output').textContent = `${payload.role.display_name} 模型已更新为 ${model || 'profile fallback'}，下一次 @ 该角色立即生效。`;
-  await refresh();
-}
-
-refresh();
-setInterval(refresh, 1500);
-</script>
+<datalist id="model-options"></datalist>
+<script src="vendor/phaser.min.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>

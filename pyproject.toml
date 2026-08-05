@@ -5,6 +5,7 @@ description = "A provider-neutral multi-agent harness for AI job search, exposed
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "anthropic>=0.116",
   "fastapi>=0.115",
   "httpx>=0.27",
   "langgraph>=0.3",
@@ -24,6 +25,9 @@ dev = [
 job-agent-api = "job_agent_harness.api:main"
 job-agent-feishu = "job_agent_harness.feishu_channel:main"
 job-agent-push-daily = "job_agent_harness.push_daily:main"
+job-agent-write-daily = "job_agent_harness.daily_generate:main"
+job-agent-roles-sync = "job_agent_harness.roles_sync:main"
+job-agent-watch = "job_agent_harness.always_on:main"
 
 [build-system]
 requires = ["hatchling"]

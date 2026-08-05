@@ -9,8 +9,8 @@
   `route → discovery_phase → analysis_phase → action_phase → judge`。岗位侦察
   先执行，JD/岗位知识与简历/作品/面试分别在两个并行层运行；另保留 `asyncio`
   baseline 用于性能对照和降级。
-- 角色：7 个独立业务角色为岗位侦察员、JD 分析师、岗位知识补充员、
-  简历策略师、作品教练、面试教练和证据审核员；另有 1 个飞书总控入口。
+- 角色：7 个独立业务角色为 Job Scout、JD Analyst、Knowledge Curator、
+  Resume Strategist、Portfolio Coach、Interview Coach 和 Evidence Judge；另有 1 个飞书总控入口。
 - 飞书：每个角色可绑定独立飞书自建应用，在同一群中被单独 `@`。模型通过用户
   自己的 OpenAI-compatible API 调用，不使用飞书 AI。直接 `@` 一个角色时会保留
   专家完整正文，Judge 只追加证据审核。
@@ -27,7 +27,7 @@
 - 日报：`job-agent-push-daily` 默认由总控先发综合日报和任务拆解，再把同一日报按
   职责拆给七个角色机器人推送。
 - 分角色模型：解析顺序为 `RoleSpec.model`、角色专属环境变量、model profile。
-  当前岗位知识补充员使用 `Qwen/Qwen3.5-397B-A17B`，其他内置角色使用
+  当前 Knowledge Curator 使用 `Qwen/Qwen3.5-397B-A17B`，其他内置角色使用
   `Qwen/Qwen2.5-32B-Instruct`。
 - 可复核材料：`README.md` 包含真实回放截图；`docs/rpg-agent-town.md` 说明认知
   和回放映射；`docs/performance-report.md` 说明 baseline、LangGraph 与模型对比。

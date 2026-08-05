@@ -108,7 +108,7 @@ async def test_judge_is_a_separate_model_call(registry):
     assert "仓库路径或复核命令" in judge_query
     assert "不要重写或压缩角色正文" in judge_query
     assert "## jd_analyst" in report.final_output
-    assert "## 证据审核员补充" in report.final_output
+    assert "## Evidence Judge 补充" in report.final_output
     assert report.results[0].output in report.final_output
     assert report.results[-1].output in report.final_output
 

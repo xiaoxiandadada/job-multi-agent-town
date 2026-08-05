@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -13,6 +14,8 @@ from pydantic import BaseModel, Field
 
 ActivityKind = Literal[
     "run_started",
+    "intake_completed",
+    "attachment_read",
     "route_completed",
     "phase_started",
     "handoff_created",
@@ -24,8 +27,12 @@ ActivityKind = Literal[
     "task_completed",
     "daily_push_started",
     "daily_push_completed",
+    "patrol_started",
+    "patrol_completed",
+    "heartbeat",
     "agent_started",
     "agent_completed",
+    "closing_created",
     "run_completed",
     "run_failed",
 ]
@@ -36,6 +43,7 @@ ActivityStatus = Literal[
     "error",
     "timeout",
     "completed",
+    "idle",
 ]
 
 
@@ -65,6 +73,39 @@ class ActivityEvent(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     progress: int | None = Field(default=None, ge=0, le=100)
     metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+def _reversed_lines(
+    path: Path,
+    *,
+    chunk_size: int = 1 << 16,
+) -> Iterator[str]:
+    """Yield a file's non-empty lines last-to-first, reading lazily.
+
+    Binary mode and a manual seek rather than ``readlines()`` because the point is
+    to never touch the head of the file. Bytes are decoded per line, so a torn
+    write from another process costs one unparseable line instead of an exception
+    for the whole read.
+    """
+
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        position = handle.tell()
+        pending = b""
+        while position > 0:
+            size = min(chunk_size, position)
+            position -= size
+            handle.seek(position)
+            block = handle.read(size) + pending
+            lines = block.split(b"\n")
+            # The first element may be the tail of a line that starts in the
+            # chunk we have not read yet, so it has to wait for the next block.
+            pending = lines[0]
+            for line in reversed(lines[1:]):
+                if line.strip():
+                    yield line.decode("utf-8", errors="replace")
+        if pending.strip():
+            yield pending.decode("utf-8", errors="replace")
 
 
 class ActivityStore:
@@ -160,14 +201,30 @@ class ActivityStore:
         limit: int = 300,
         run_id: str | None = None,
     ) -> list[ActivityEvent]:
+        """The last ``limit`` events, oldest first.
+
+        Reads backwards from the end of the file and stops as soon as it has
+        enough. The obvious implementation — read the whole file, validate every
+        line, keep the tail — costs the same on an empty page as on a busy one and
+        grows forever: the web page polls this every 1.5 seconds, two thirds of the
+        file is always-on heartbeats, and nothing ever deletes a line. Scanning
+        from the end makes the cost proportional to what is asked for instead of to
+        how long the process has been running.
+        """
+
         if not self.path.exists():
             return []
+        wanted = max(1, min(limit, 2000))
         events: list[ActivityEvent] = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
+        for line in _reversed_lines(self.path):
             try:
                 event = ActivityEvent.model_validate_json(line)
             except (ValueError, json.JSONDecodeError):
                 continue
-            if run_id is None or event.run_id == run_id:
-                events.append(event)
-        return events[-max(1, min(limit, 2000)) :]
+            if run_id is not None and event.run_id != run_id:
+                continue
+            events.append(event)
+            if len(events) >= wanted:
+                break
+        events.reverse()
+        return events

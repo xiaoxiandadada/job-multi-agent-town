@@ -17,21 +17,21 @@ def build_registry(path: Path) -> RoleRegistry:
         [
             RoleSpec(
                 role_id="jd_analyst",
-                display_name="JD 分析师",
+                display_name="JD Analyst",
                 goal="提取岗位要求和技能缺口",
                 system_prompt="提取 JD 证据。",
                 trigger_keywords=["JD"],
             ),
             RoleSpec(
                 role_id="resume_strategist",
-                display_name="简历策略师",
+                display_name="Resume Strategist",
                 goal="生成有证据的简历建议",
                 system_prompt="根据已有证据生成简历建议。",
                 trigger_keywords=["简历"],
             ),
             RoleSpec(
                 role_id="portfolio_coach",
-                display_name="作品教练",
+                display_name="Portfolio Coach",
                 goal="生成可验证的作品动作",
                 system_prompt="根据岗位缺口生成作品动作。",
                 trigger_keywords=["作品"],

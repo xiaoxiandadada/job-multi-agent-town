@@ -16,10 +16,12 @@ from .daily_brief import (
     load_daily_messages,
     load_role_daily_messages,
 )
+from .daily_generate import ensure_daily_markdown
 from .feishu_channel import FeishuBotBinding, load_bot_bindings
 from .runtime import (
     build_activity_store,
     build_memory_store,
+    build_orchestrator,
     build_registry,
     build_task_graph_store,
     prepare_directory,
@@ -71,6 +73,8 @@ async def push_daily(
     full: bool,
     requested_role: str | None = None,
     include_controller: bool = True,
+    *,
+    ensure_brief: bool = False,
 ) -> None:
     started = time.perf_counter()
     run_id = f"daily-{uuid.uuid4()}"
@@ -79,22 +83,36 @@ async def push_daily(
     )
     resolved_date = target_date or current_date().isoformat()
     max_chars = int(os.getenv("JOB_AGENT_FEISHU_MAX_CHARS", "8000"))
+    registry = build_registry()
+    memory_store = build_memory_store()
+    if ensure_brief:
+        # The scheduled path takes this branch: nothing guarantees somebody wrote
+        # a brief before 09:30, and a push that dies on FileNotFoundError is the
+        # same silence as having no scheduler at all.
+        await ensure_daily_markdown(
+            build_orchestrator(registry, memory_store),
+            resolved_date,
+            prepare_dir=prepare_directory(),
+            data_dir=runtime_data_dir(),
+        )
+    cache_dir = runtime_data_dir()
     fallback_messages = load_daily_messages(
         prepare_directory(),
         resolved_date,
         mode="full" if full else "summary",
         max_chars=max_chars,
+        cache_dir=cache_dir,
     )
     role_messages = load_role_daily_messages(
         prepare_directory(),
         resolved_date,
         max_chars=max_chars,
+        cache_dir=cache_dir,
     )
     fallback_messages = [
         *fallback_messages,
         build_daily_assignment_digest(resolved_date),
     ]
-    registry = build_registry()
     bindings = load_bot_bindings(registry)
     plan = build_delivery_plan(
         bindings,
@@ -104,7 +122,6 @@ async def push_daily(
         include_controller=include_controller or full,
     )
     activity_store = build_activity_store()
-    memory_store = build_memory_store()
     task_graph_store = build_task_graph_store()
     selected_role_ids = [
         binding.role_id
@@ -355,6 +372,11 @@ def main() -> None:
         action="store_true",
         help="只发送角色分工消息，不发送总控综合日报",
     )
+    parser.add_argument(
+        "--generate",
+        action="store_true",
+        help="当天没有日报时，先让各角色现场写一份再推（定时推送默认开启）",
+    )
     args = parser.parse_args()
     asyncio.run(
         push_daily(
@@ -362,6 +384,7 @@ def main() -> None:
             args.full,
             args.requested_role,
             not args.roles_only,
+            ensure_brief=args.generate,
         )
     )
 

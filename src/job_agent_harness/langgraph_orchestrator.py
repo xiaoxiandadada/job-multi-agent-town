@@ -143,7 +143,7 @@ class LangGraphOrchestrator:
     ) -> dict[str, Any]:
         request = RunRequest.model_validate(state["request"])
         roles = [
-            self.base.registry.get(role_id)
+            self.base.role_for_run(role_id, request)
             for role_id in state.get("discovery_role_ids", [])
         ]
         self.base._record(
@@ -159,6 +159,7 @@ class LangGraphOrchestrator:
             request.query,
             run_id=state["run_id"],
             phase="discovery",
+            images=request.images,
         )
         return {
             "discovery_results": [
@@ -186,12 +187,12 @@ class LangGraphOrchestrator:
         if discovery_output:
             query = (
                 f"用户原始任务：{request.query}\n\n"
-                "以下是岗位侦察员先完成的岗位与来源证据。"
+                "以下是 Job Scout 先完成的岗位与来源证据。"
                 "请基于该证据做专业分析，不要重新猜测岗位事实：\n\n"
                 f"{discovery_output}"
             )
         roles = [
-            self.base.registry.get(role_id)
+            self.base.role_for_run(role_id, request)
             for role_id in state.get("analysis_role_ids", [])
         ]
         if discovery_output and roles:
@@ -220,6 +221,7 @@ class LangGraphOrchestrator:
             query,
             run_id=state["run_id"],
             phase="analysis",
+            images=request.images,
         )
         return {
             "analysis_results": [
@@ -255,7 +257,7 @@ class LangGraphOrchestrator:
                 f"{context_output}"
             )
         roles = [
-            self.base.registry.get(role_id)
+            self.base.role_for_run(role_id, request)
             for role_id in state.get("action_role_ids", [])
         ]
         if context_output and roles:
@@ -288,6 +290,7 @@ class LangGraphOrchestrator:
                         query,
                         run_id=state["run_id"],
                         phase="action",
+                        images=request.images,
                     )
                 )
         else:
@@ -296,6 +299,7 @@ class LangGraphOrchestrator:
                 query,
                 run_id=state["run_id"],
                 phase="action",
+                images=request.images,
             )
         return {"action_results": [result.model_dump() for result in results]}
 
@@ -314,7 +318,7 @@ class LangGraphOrchestrator:
         judge_called = False
         if request.use_judge and successful:
             try:
-                judge = self.base.registry.get("judge")
+                judge = self.base.role_for_run("judge", request)
             except KeyError:
                 pass
             else:
@@ -358,8 +362,12 @@ class LangGraphOrchestrator:
         request: RunRequest,
         *,
         thread_id: str | None = None,
+        run_id: str | None = None,
     ) -> RunReport:
-        run_id = thread_id or str(uuid.uuid4())
+        # ``run_id`` and ``thread_id`` are the same value here — the graph's
+        # checkpoint thread is the run. ``run_id`` is the name the rest of the
+        # codebase uses, ``thread_id`` stays for callers that already pass it.
+        run_id = run_id or thread_id or str(uuid.uuid4())
         started = time.perf_counter()
         self.base._record(
             run_id=run_id,
@@ -368,6 +376,7 @@ class LangGraphOrchestrator:
             phase="route",
             mode=request.mode,
             query=request.query,
+            metrics={"origin": request.origin},
         )
         try:
             state = await self.graph.ainvoke(

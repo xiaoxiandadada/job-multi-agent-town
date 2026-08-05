@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 
 from lark_oapi.channel import FeishuChannel
 
+from .attachments import download_images, strip_image_markdown
+from .chief_of_staff import ChiefOfStaff
 from .commands import HELP_TEXT, RunCommand, parse_run_command
 from .daily_brief import (
     load_daily_messages,
@@ -26,16 +28,36 @@ from .feishu_group import (
     ensure_agent_town_group,
     remember_preferred_chat_id,
 )
-from .models import RoleSpec, RunReport, RunRequest
+from .interview_session import (
+    COACH_ROLE_ID,
+    INTERVIEW_HELP,
+    InterviewCoach,
+    InterviewSessionStore,
+)
+from .models import ImageAttachment, RoleSpec, RunReport, RunRequest
 from .runtime import (
     build_orchestrator,
     build_registry,
     prepare_directory,
     runtime_data_dir,
 )
+from .voice import (
+    VOICE_SETUP_HINT,
+    VOICE_UPLOAD_HINT,
+    TranscriptionUnavailable,
+    audio_resource,
+    find_opus_encoder,
+    synthesize_speech_async,
+    transcribe_opus,
+)
 
 
 logger = logging.getLogger(__name__)
+
+#: How long a picture waits for the message that explains it. Long enough to
+#: type a sentence, short enough that this morning's screenshot never attaches
+#: itself to this afternoon's unrelated question.
+PENDING_IMAGE_SECONDS = 180.0
 
 
 @dataclass(frozen=True)
@@ -44,7 +66,7 @@ class FeishuBotBinding:
 
     app_id: str
     app_secret: str = field(repr=False)
-    display_name: str = "AI 求职 Multi-Agent"
+    display_name: str = "Chief of Staff"
     role_id: str | None = None
 
     @property
@@ -60,12 +82,39 @@ class LazyOrchestrator:
         self._orchestrator = None
         self._lock = asyncio.Lock()
 
-    async def run(self, request):
+    async def _ensure(self):
         if self._orchestrator is None:
             async with self._lock:
                 if self._orchestrator is None:
                     self._orchestrator = self._factory()
-        return await self._orchestrator.run(request)
+        return self._orchestrator
+
+    async def resolve(self):
+        """The real orchestrator, built if this is the first caller.
+
+        The Chief of Staff needs the model client and the activity store before
+        the run starts, so it has to be able to ask for the stack by name
+        instead of reaching into a private attribute.
+        """
+
+        return await self._ensure()
+
+    async def run(self, request, *, run_id: str | None = None):
+        orchestrator = await self._ensure()
+        if run_id is None:
+            return await orchestrator.run(request)
+        return await orchestrator.run(request, run_id=run_id)
+
+    async def complete(self, role, query):
+        """One model call for one role, outside the run pipeline.
+
+        A live mock interview is a conversation, not a graph run: it needs the
+        coach's own reply with a per-turn prompt, and no Judge pass over it.
+        """
+
+        orchestrator = await self._ensure()
+        base = getattr(orchestrator, "base", orchestrator)
+        return await base.model_client.complete(role, query)
 
 
 def role_bot_env_names(role_id: str) -> tuple[str, str]:
@@ -209,11 +258,96 @@ def command_for_binding(
     )
 
 
+def interview_coach_for(
+    binding: FeishuBotBinding,
+    registry,
+    orchestrator,
+) -> InterviewCoach | None:
+    """The mock-interview driver for this identity, if it hosts one.
+
+    Only the coach bot and the controller run interviews; giving every role bot
+    a session store would let a plain question to the JD analyst be scored as
+    an interview answer.
+    """
+
+    if binding.role_id not in (None, COACH_ROLE_ID):
+        return None
+    complete = getattr(orchestrator, "complete", None)
+    if complete is None:
+        return None
+    return InterviewCoach(
+        registry=registry,
+        complete=complete,
+        store=InterviewSessionStore(runtime_data_dir() / "interviews"),
+        identity=binding.identity_label,
+    )
+
+
+async def transcribe_message_audio(
+    channel,
+    message,
+    binding: FeishuBotBinding,
+) -> str:
+    """Text for a voice message, using Feishu's own recognizer."""
+
+    resource = audio_resource(message)
+    if resource is None:
+        return ""
+    audio = await channel.download_resource(
+        getattr(resource, "file_key", ""),
+        "audio",
+        message_id=getattr(message, "message_id", None),
+    )
+    return await transcribe_opus(
+        audio or b"",
+        app_id=binding.app_id,
+        app_secret=binding.app_secret,
+    )
+
+
+async def send_voice_reply(
+    channel,
+    chat_id: str,
+    text: str,
+    *,
+    directory,
+) -> str | None:
+    """Send ``text`` as a Feishu voice message.
+
+    Returns ``None`` on success, or the hint explaining what to fix. The two
+    failures need different fixes — a missing local encoder versus a missing
+    `im:resource:upload` scope — and neither may cost the interview turn, so
+    nothing here raises.
+    """
+
+    clip = await synthesize_speech_async(text, directory)
+    if clip is None:
+        return VOICE_SETUP_HINT
+    try:
+        # `source`, not `path`: the channel coerces media through
+        # `coerce_media_source`, which reads exactly this key.
+        await send_checked(channel, chat_id, {"audio": {"source": str(clip.path)}})
+    except Exception as exc:
+        logger.warning("voice reply upload failed: %s", exc)
+        return VOICE_UPLOAD_HINT
+    finally:
+        clip.path.unlink(missing_ok=True)
+    return None
+
+
 def binding_help(binding: FeishuBotBinding) -> str:
     if binding.role_id is None:
         return HELP_TEXT
+    if binding.role_id == COACH_ROLE_ID:
+        return (
+            f"# {binding.display_name}\n\n"
+            f"- 绑定角色：`{binding.role_id}`\n"
+            f"- 群聊：`@{binding.display_name} <问题>` 得到一份完整面试准备\n"
+            f"- 实时互动：见下方模拟面试命令，可以发语音回答\n\n"
+            f"{INTERVIEW_HELP}"
+        )
     judge_note = (
-        "回答后会自动交给证据审核员复核。"
+        "回答后会自动交给 Evidence Judge 复核。"
         if binding.role_id != "judge"
         else "该身份只做证据审查，不再重复调用 Judge。"
     )
@@ -234,7 +368,101 @@ async def send_checked(channel, to: str, message):
     return result
 
 
-def format_report_message(report: RunReport, max_chars: int = 8000) -> str:
+CODE_FENCE = "```"
+#: Below this a chunk could not even hold a fence pair plus one line.
+CODE_FENCE_MIN_BUDGET = 32
+#: Info strings a model uses when it wraps a whole prose answer in a fence.
+PROSE_FENCE_LANGUAGES = {"", "markdown", "md", "text", "plaintext"}
+
+
+def unwrap_whole_body_fence(text: str) -> str:
+    """Undo a model wrapping its entire answer in one fence.
+
+    Feishu then renders the whole reply as a code box: no headings, no
+    clickable JD links, just grey monospace. A block claiming ``bash`` or
+    ``json`` is left alone — that one really is code.
+    """
+
+    stripped = text.strip()
+    if not stripped.startswith(CODE_FENCE):
+        return text
+    lines = stripped.splitlines()
+    if len(lines) < 3 or lines[-1].strip() != CODE_FENCE:
+        return text
+    language = lines[0].strip()[len(CODE_FENCE) :].strip().casefold()
+    if language not in PROSE_FENCE_LANGUAGES:
+        return text
+    inner = "\n".join(lines[1:-1])
+    if CODE_FENCE in inner:
+        return text
+    return inner
+
+
+def split_markdown_message(body: str, *, max_chars: int) -> list[str]:
+    """Whole-line chunks, each with balanced code fences.
+
+    The old path cut the body at a character budget. When the cut landed
+    inside a code block the closing fence went missing, and Feishu rendered
+    everything after it — the run footer included — as one code box. It also
+    silently threw away most of a long grounded answer, which is exactly the
+    concrete content the reader asked for.
+    """
+
+    body = unwrap_whole_body_fence(body)
+    budget = max(CODE_FENCE_MIN_BUDGET, max_chars)
+    chunks: list[str] = []
+    current: list[str] = []
+    fence: str | None = None
+    reopened = False
+
+    def flush() -> None:
+        nonlocal current, reopened
+        if not current or (reopened and len(current) == 1):
+            current = []
+            return
+        text = "\n".join(current)
+        if fence is not None:
+            text = f"{text}\n{CODE_FENCE}"
+        chunks.append(text)
+        if fence is None:
+            current = []
+            reopened = False
+        else:
+            current = [f"{CODE_FENCE}{fence}"]
+            reopened = True
+
+    def used() -> int:
+        return sum(len(line) + 1 for line in current)
+
+    for line in body.splitlines():
+        # Leave room for a closing fence this chunk may have to add.
+        room = budget - (len(CODE_FENCE) + 1 if fence is not None else 0)
+        for piece in _hard_wrap(line, room):
+            if current and used() + len(piece) + 1 > room:
+                flush()
+            current.append(piece)
+        stripped = line.strip()
+        if stripped.startswith(CODE_FENCE):
+            fence = None if fence is not None else stripped[len(CODE_FENCE) :].strip()
+    flush()
+    return chunks or [""]
+
+
+
+def _hard_wrap(line: str, room: int) -> list[str]:
+    """A single line longer than a whole chunk still has to be sent."""
+
+    if len(line) <= room:
+        return [line]
+    return [line[start : start + room] for start in range(0, len(line), room)]
+
+
+def format_report_messages(
+    report: RunReport,
+    max_chars: int = 8000,
+) -> list[str]:
+    """Every part of the answer, split rather than truncated."""
+
     footer = (
         f"run={report.run_id[:8]} · "
         f"latency={report.metrics.wall_latency_ms:.0f}ms · "
@@ -242,11 +470,18 @@ def format_report_message(report: RunReport, max_chars: int = 8000) -> str:
         f"calls={report.metrics.model_calls}"
     )
     body = report.final_output.strip() or "本次运行没有可用输出。"
-    available = max(0, max_chars - len(footer) - 2)
-    if len(body) > available:
-        suffix = "\n\n[内容已截断]"
-        body = body[: max(0, available - len(suffix))] + suffix
-    return f"{body}\n\n{footer}"
+    messages = split_markdown_message(
+        body,
+        max_chars=max(CODE_FENCE_MIN_BUDGET, max_chars - len(footer) - 2),
+    )
+    total = len(messages)
+    if total > 1:
+        messages = [
+            f"（{index}/{total}）\n\n{text}"
+            for index, text in enumerate(messages, start=1)
+        ]
+    messages[-1] = f"{messages[-1]}\n\n{footer}"
+    return messages
 
 
 def configure_sdk_logging() -> None:
@@ -264,12 +499,80 @@ def register_message_handler(
     orchestrator,
     connected_role_ids: set[str],
 ) -> None:
+    coach = interview_coach_for(binding, registry, orchestrator)
+    #: One hint per chat: repeating the encoder install line every turn is noise.
+    voice_hint_sent: set[tuple[str, str]] = set()
+    #: Feishu sends a picture and its caption as two separate messages, so an
+    #: image alone is held here until the next text message says what to do with
+    #: it. Keyed by chat, one batch deep — a newer batch replaces an older one.
+    pending_images: dict[str, tuple[float, list[ImageAttachment]]] = {}
+    #: The controller identity speaks for itself now; role bots keep answering
+    #: as the single specialist they are bound to.
+    chief = ChiefOfStaff(orchestrator) if binding.role_id is None else None
+
     async def on_message(message):
-        text = strip_bound_bot_mention(
-            message.content_text,
-            binding,
-            getattr(message, "mentions", ()),
-        )
+        spoken = False
+        if audio_resource(message) is not None:
+            try:
+                text = await transcribe_message_audio(channel, message, binding)
+            except Exception as exc:
+                await send_checked(
+                    channel,
+                    message.chat_id,
+                    {
+                        "text": (
+                            f"语音没能转成文字：{exc}\n"
+                            "请确认该机器人已开通 speech_to_text:speech 权限，"
+                            "或直接发文字。"
+                        )
+                    },
+                )
+                return
+            spoken = True
+            await send_checked(
+                channel,
+                message.chat_id,
+                {"text": f"🎧 听到你说：{text}"},
+            )
+        else:
+            text = strip_bound_bot_mention(
+                message.content_text,
+                binding,
+                getattr(message, "mentions", ()),
+            )
+
+        images: list[ImageAttachment] = []
+        if not spoken:
+            images, problems = await download_images(channel, message)
+            if images or problems:
+                # ``content_text`` renders a picture as ``![image](file_key)``.
+                # Left in place, the model answers about a link that does not
+                # exist; the pixels are in ``images`` instead.
+                text = strip_image_markdown(text)
+            if problems:
+                await send_checked(
+                    channel,
+                    message.chat_id,
+                    {
+                        "text": "⚠️ 附件问题：\n"
+                        + "\n".join(f"- {problem}" for problem in problems)
+                    },
+                )
+        if images and not text:
+            pending_images[message.chat_id] = (time.monotonic(), images)
+            await send_checked(
+                channel,
+                message.chat_id,
+                {
+                    "text": (
+                        f"🖼️ 收到 {len(images)} 张图片，已暂存 "
+                        f"{int(PENDING_IMAGE_SECONDS)} 秒。"
+                        "接着说要我做什么，例如「按这张 JD 帮我改简历」。"
+                    )
+                },
+            )
+            return
+
         if binding.role_id is None:
             remember_preferred_chat_id(
                 runtime_data_dir(),
@@ -282,7 +585,7 @@ def register_message_handler(
                     message.chat_id,
                     {
                         "text": (
-                            "请在与总控机器人 AI 求职 Multi-Agent "
+                            "请在与总控机器人 Chief of Staff "
                             "的私聊中发送 /group-create。"
                         )
                     },
@@ -385,12 +688,16 @@ def register_message_handler(
                         target_date,
                         mode=mode,
                         max_chars=max_chars,
+                        # So `/daily` can still show a brief the roles wrote
+                        # themselves on a morning nobody prepared one.
+                        cache_dir=runtime_data_dir(),
                     )
                 else:
                     messages = load_role_daily_messages(
                         prepare_directory(),
                         target_date,
                         max_chars=max_chars,
+                        cache_dir=runtime_data_dir(),
                     )[binding.role_id]
                 for markdown in messages:
                     await send_checked(
@@ -414,7 +721,7 @@ def register_message_handler(
                     {
                         "text": (
                             "新增角色请发送给总控机器人 "
-                            "AI 求职 Multi-Agent。"
+                            "Chief of Staff。"
                         )
                     },
                 )
@@ -430,13 +737,71 @@ def register_message_handler(
             await send_checked(channel, message.chat_id, {"text": response})
             return
 
+        if coach is not None:
+            max_chars = int(os.getenv("JOB_AGENT_FEISHU_MAX_CHARS", "8000"))
+            try:
+                turn = await coach.handle(
+                    message.chat_id,
+                    text,
+                    spoken=spoken,
+                )
+            except Exception as exc:
+                logger.exception("mock interview turn failed")
+                await send_checked(
+                    channel,
+                    message.chat_id,
+                    {"text": f"模拟面试这一轮失败：{exc}"},
+                )
+                return
+            if turn is not None:
+                for markdown in split_markdown_message(
+                    turn.markdown,
+                    max_chars=max_chars,
+                ):
+                    await send_checked(
+                        channel,
+                        message.chat_id,
+                        {"markdown": markdown},
+                    )
+                session = turn.session
+                wants_voice = (
+                    session is not None and session.voice and bool(turn.speech)
+                )
+                hint = (
+                    await send_voice_reply(
+                        channel,
+                        message.chat_id,
+                        turn.speech,
+                        directory=runtime_data_dir() / "voice",
+                    )
+                    if wants_voice
+                    else None
+                )
+                if hint is not None and (message.chat_id, hint) not in voice_hint_sent:
+                    # Said once per cause per chat: the candidate needs the fix,
+                    # not the same reminder after every single question.
+                    voice_hint_sent.add((message.chat_id, hint))
+                    await send_checked(
+                        channel,
+                        message.chat_id,
+                        {"text": hint},
+                    )
+                return
+
         try:
             command = command_for_binding(text, binding)
         except ValueError as exc:
             await send_checked(channel, message.chat_id, {"text": str(exc)})
             return
 
-        if command.label:
+        if not images:
+            held = pending_images.pop(message.chat_id, None)
+            if held is not None:
+                sent_at, buffered = held
+                if time.monotonic() - sent_at <= PENDING_IMAGE_SECONDS:
+                    images = buffered
+
+        if chief is None and command.label:
             await send_checked(
                 channel,
                 message.chat_id,
@@ -449,20 +814,31 @@ def register_message_handler(
             )
 
         logger.info(
-            "run started label=%s roles=%s mode=%s",
+            "run started label=%s roles=%s mode=%s images=%s",
             command.label or "auto",
             len(command.requested_roles),
             command.mode,
+            len(images),
         )
+        request = RunRequest(
+            query=command.query,
+            requested_roles=command.requested_roles,
+            mode=command.mode,
+            use_judge=binding.role_id != "judge",
+            images=images,
+        )
+
+        async def notify(note: str) -> None:
+            await send_checked(channel, message.chat_id, {"text": note})
+
         try:
-            report = await orchestrator.run(
-                RunRequest(
-                    query=command.query,
-                    requested_roles=command.requested_roles,
-                    mode=command.mode,
-                    use_judge=binding.role_id != "judge",
-                )
-            )
+            if chief is not None:
+                # The controller's own receipt replaces the old one-line
+                # "已启动" notice: it names the roles and the reason, and it is
+                # sent for a plain question too, which used to get silence.
+                report = await chief.run(request, notify=notify)
+            else:
+                report = await orchestrator.run(request)
         except Exception as exc:
             await send_checked(
                 channel,
@@ -481,11 +857,12 @@ def register_message_handler(
         )
         max_chars = int(os.getenv("JOB_AGENT_FEISHU_MAX_CHARS", "8000"))
         try:
-            await send_checked(
-                channel,
-                message.chat_id,
-                {"markdown": format_report_message(report, max_chars=max_chars)},
-            )
+            for markdown in format_report_messages(report, max_chars=max_chars):
+                await send_checked(
+                    channel,
+                    message.chat_id,
+                    {"markdown": markdown},
+                )
         except Exception:
             logger.exception(
                 "full Feishu result send failed for run=%s",
@@ -539,6 +916,10 @@ async def run_channel() -> None:
 
         binding, channel = channels[0]
         await channel.connect_until_ready(timeout=30)
+        if find_opus_encoder() is None:
+            # Said once at startup so the operator learns this before a
+            # candidate waits for a voice question that will never arrive.
+            logger.info("voice replies unavailable: %s", VOICE_SETUP_HINT)
         for binding, _ in channels:
             logger.info(
                 "Feishu identity connected name=%s role=%s",

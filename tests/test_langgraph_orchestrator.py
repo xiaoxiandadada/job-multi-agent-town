@@ -125,6 +125,79 @@ async def test_langgraph_direct_role_keeps_specialist_answer_before_judge(tmp_pa
     assert client.calls == ["job_knowledge_curator", "judge"]
     assert "不要重写或压缩角色正文" in dict(client.queries)["judge"]
     assert "## job_knowledge_curator" in report.final_output
-    assert "## 证据审核员补充" in report.final_output
+    assert "## Evidence Judge 补充" in report.final_output
     assert report.results[0].output in report.final_output
     assert report.results[-1].output in report.final_output
+
+
+class TimeoutRecordingClient(MockModelClient):
+    """Remembers the timeout each role was actually run with."""
+
+    def __init__(self):
+        super().__init__()
+        self.timeouts: list[tuple[str, float]] = []
+
+    async def complete(self, role, query, *, images=()):
+        self.timeouts.append((role.role_id, role.timeout_seconds))
+        return await super().complete(role, query, images=images)
+
+
+async def test_per_run_timeout_survives_every_graph_node(tmp_path):
+    """Only role ids cross the graph state, so nodes re-read the registry.
+
+    A background patrol sets a much larger timeout than the 45 s an @mention
+    gets; when the re-read dropped the override, patrols kept dying at the
+    role's own timeout instead.
+    """
+
+    registry = RoleRegistry(tmp_path / "roles.json")
+    registry.replace_all(
+        [
+            make_role("jd_analyst"),
+            make_role("resume_strategist"),
+            make_role("judge", "judge"),
+        ]
+    )
+    client = TimeoutRecordingClient()
+    graph = LangGraphOrchestrator(
+        MultiAgentOrchestrator(
+            registry,
+            client,
+            task_graph_store=TaskGraphStore(tmp_path / "task_graphs"),
+        )
+    )
+
+    await graph.run(
+        RunRequest(
+            query="巡检岗位",
+            requested_roles=["jd_analyst", "resume_strategist"],
+            mode="collaborative",
+            timeout_seconds=300.0,
+        ),
+        thread_id="patrol-thread",
+    )
+
+    assert client.timeouts, "没有任何角色被执行"
+    assert {timeout for _, timeout in client.timeouts} == {300.0}
+    # The judge runs too, and it is re-read from the registry separately.
+    assert "judge" in {role_id for role_id, _ in client.timeouts}
+
+
+async def test_without_an_override_roles_keep_their_own_timeout(tmp_path):
+    registry = RoleRegistry(tmp_path / "roles.json")
+    registry.replace_all([make_role("jd_analyst"), make_role("judge", "judge")])
+    client = TimeoutRecordingClient()
+    graph = LangGraphOrchestrator(
+        MultiAgentOrchestrator(
+            registry,
+            client,
+            task_graph_store=TaskGraphStore(tmp_path / "task_graphs"),
+        )
+    )
+
+    await graph.run(
+        RunRequest(query="分析岗位", requested_roles=["jd_analyst"], mode="single"),
+        thread_id="plain-thread",
+    )
+
+    assert {timeout for _, timeout in client.timeouts} == {45.0}

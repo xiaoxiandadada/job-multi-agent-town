@@ -167,10 +167,10 @@ def build_run_task_graph(
         tasks.append(
             TaskNode(
                 task_id="judge",
-                title="证据审核员：审核并发布最终结果",
+                title="Evidence Judge：审核并发布最终结果",
                 description="汇总所有角色交付，检查来源、冲突、遗漏和可执行性。",
                 role_id="judge",
-                display_name="证据审核员",
+                display_name="Evidence Judge",
                 phase="judge",
                 status="ready" if not tasks else "blocked",
                 depends_on=[task.task_id for task in tasks],
@@ -207,10 +207,10 @@ def build_daily_task_graph(
         tasks.append(
             TaskNode(
                 task_id="controller_daily",
-                title="AI 求职 Multi-Agent：发布每日求职总报",
+                title="Chief of Staff：发布每日求职总报",
                 description=controller_description,
                 role_id="controller",
-                display_name="AI 求职 Multi-Agent",
+                display_name="Chief of Staff",
                 phase="delivery",
                 status="ready",
                 acceptance_criteria=[

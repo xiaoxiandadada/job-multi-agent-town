@@ -79,7 +79,7 @@ def merge_judged_output(
         safe_audit = close_unbalanced_code_fence(judge_result.output)
         return (
             f"{safe_draft}\n\n---\n\n"
-            f"## 证据审核员补充\n\n{safe_audit}"
+            f"## Evidence Judge 补充\n\n{safe_audit}"
         )
     if judge_result.status == "ok":
         return close_unbalanced_code_fence(judge_result.output)
@@ -183,6 +183,21 @@ class MultiAgentOrchestrator:
             None,
         )
 
+    def apply_run_overrides(self, role, request: RunRequest):
+        """A role as this run needs it.
+
+        Only role ids travel through the LangGraph state, so every node
+        re-reads the role from the registry. Per-run knobs have to be re-applied
+        there or they quietly vanish between the route and the action node.
+        """
+
+        if request.timeout_seconds is None:
+            return role
+        return role.model_copy(update={"timeout_seconds": request.timeout_seconds})
+
+    def role_for_run(self, role_id: str, request: RunRequest):
+        return self.apply_run_overrides(self.registry.get(role_id), request)
+
     def select_roles(self, request: RunRequest):
         roles = [
             role
@@ -203,12 +218,14 @@ class MultiAgentOrchestrator:
         if not selected:
             selected = roles[:1]
         if request.mode == "single":
-            return selected[:1]
-        return list({role.role_id: role for role in selected}.values())
+            selected = selected[:1]
+        else:
+            selected = list({role.role_id: role for role in selected}.values())
+        return [self.apply_run_overrides(role, request) for role in selected]
 
-    async def _complete_role(self, role, query: str):
+    async def _complete_role(self, role, query: str, images=()):
         async with self.semaphore:
-            return await self.model_client.complete(role, query)
+            return await self.model_client.complete(role, query, images=images)
 
     async def _run_role(
         self,
@@ -217,6 +234,7 @@ class MultiAgentOrchestrator:
         *,
         run_id: str | None = None,
         phase: str = "action",
+        images=(),
     ) -> AgentResult:
         started = time.perf_counter()
         role_query = query
@@ -298,7 +316,7 @@ class MultiAgentOrchestrator:
             )
         try:
             reply = await asyncio.wait_for(
-                self._complete_role(role, role_query),
+                self._complete_role(role, role_query, images),
                 timeout=role.timeout_seconds,
             )
             result = AgentResult(
@@ -405,6 +423,7 @@ class MultiAgentOrchestrator:
         *,
         run_id: str | None = None,
         phase: str = "action",
+        images=(),
     ) -> list[AgentResult]:
         return list(
             await asyncio.gather(
@@ -414,6 +433,7 @@ class MultiAgentOrchestrator:
                         query,
                         run_id=run_id,
                         phase=phase,
+                        images=images,
                     )
                     for role in roles
                 )
@@ -429,8 +449,16 @@ class MultiAgentOrchestrator:
             if result.status == "ok"
         )
 
-    async def run(self, request: RunRequest) -> RunReport:
-        run_id = str(uuid.uuid4())
+    async def run(
+        self,
+        request: RunRequest,
+        *,
+        run_id: str | None = None,
+    ) -> RunReport:
+        # The caller may own the id: the chief of staff records its intake and
+        # closing under the same run so the timeline and the replay page show
+        # one run, not three unrelated fragments.
+        run_id = run_id or str(uuid.uuid4())
         started = time.perf_counter()
         self._record(
             run_id=run_id,
@@ -439,6 +467,7 @@ class MultiAgentOrchestrator:
             phase="route",
             mode=request.mode,
             query=request.query,
+            metrics={"origin": request.origin},
         )
         selected = self.select_roles(request)
         self.create_task_graph(
@@ -468,6 +497,7 @@ class MultiAgentOrchestrator:
                 request.query,
                 run_id=run_id,
                 phase="action",
+                images=request.images,
             )
         elif request.mode == "collaborative":
             discovery_roles = [
@@ -499,13 +529,14 @@ class MultiAgentOrchestrator:
                     request.query,
                     run_id=run_id,
                     phase="discovery",
+                    images=request.images,
                 )
             discovery_output = self._format_results(discovery_results)
             analysis_query = request.query
             if discovery_output:
                 analysis_query = (
                     f"用户原始任务：{request.query}\n\n"
-                    "以下是岗位侦察员先完成的岗位与来源证据。"
+                    "以下是 Job Scout 先完成的岗位与来源证据。"
                     "请基于该证据做专业分析，不要重新猜测岗位事实：\n\n"
                     f"{discovery_output}"
                 )
@@ -542,6 +573,7 @@ class MultiAgentOrchestrator:
                     analysis_query,
                     run_id=run_id,
                     phase="analysis",
+                    images=request.images,
                 )
             context_results = [
                 *discovery_results,
@@ -583,6 +615,7 @@ class MultiAgentOrchestrator:
                 action_query,
                 run_id=run_id,
                 phase="action",
+                images=request.images,
             )
             results = [*context_results, *action_results]
         else:
@@ -602,6 +635,7 @@ class MultiAgentOrchestrator:
                         request.query,
                         run_id=run_id,
                         phase="action",
+                        images=request.images,
                     )
                 )
 
@@ -610,7 +644,7 @@ class MultiAgentOrchestrator:
         judge_calls = 0
         if request.use_judge and successful:
             try:
-                judge = self.registry.get("judge")
+                judge = self.role_for_run("judge", request)
                 judge_input = build_judge_input(
                     request.query,
                     final_output,

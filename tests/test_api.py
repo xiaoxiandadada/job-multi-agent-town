@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi.testclient import TestClient
 
 from job_agent_harness.activity import ActivityEvent, ActivityStore
@@ -98,14 +100,14 @@ def test_task_graph_api_returns_dependencies_and_progress(
     roles = [
         RoleSpec(
             role_id="job_scout",
-            display_name="岗位侦察员",
+            display_name="Job Scout",
             goal="发现并核验中国 2027 届正式校招岗位",
             system_prompt="只输出有官方来源的岗位。",
             workflow_stage="context",
         ),
         RoleSpec(
             role_id="resume_strategist",
-            display_name="简历策略师",
+            display_name="Resume Strategist",
             goal="根据岗位证据选择简历版本并改写 bullet",
             system_prompt="只基于真实项目证据改写简历。",
             workflow_stage="action",
@@ -209,7 +211,7 @@ def test_town_replay_endpoint_slices_one_real_run(tmp_path, monkeypatch):
             orchestrator="langgraph",
             phase="context",
             role_id="job_scout",
-            display_name="岗位侦察员",
+            display_name="Job Scout",
         ),
         ActivityEvent(
             timestamp="2026-07-28T01:00:03+00:00",
@@ -246,3 +248,122 @@ def test_town_replay_endpoint_slices_one_real_run(tmp_path, monkeypatch):
         "/api/town",
         params={"run_id": "missing"},
     ).status_code == 404
+
+
+def test_always_on_status_is_exposed_for_the_dashboard(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOB_AGENT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("JOB_AGENT_ALWAYS_ON", "0")
+    client = TestClient(create_app())
+
+    payload = client.get("/api/always-on").json()
+
+    assert payload["configured"] is False
+    assert payload["roles"] == ["job_scout"]
+    assert payload["running"] is False
+    assert payload["patrols"] == 0
+
+
+def test_disabled_always_on_never_starts_a_shift(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOB_AGENT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("JOB_AGENT_ALWAYS_ON", "0")
+
+    # Entering the context manager is what runs the lifespan hook.
+    with TestClient(create_app()) as client:
+        assert client.get("/api/always-on").json()["running"] is False
+
+
+def test_town_api_exposes_routing_edges_and_the_always_on_shift(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("JOB_AGENT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("JOB_AGENT_ALWAYS_ON", "0")
+    store = ActivityStore(tmp_path / "activity.jsonl")
+    now = datetime.now(timezone.utc)
+    for event in [
+        ActivityEvent(
+            timestamp=(now - timedelta(seconds=200)).isoformat(),
+            run_id="run-routed",
+            kind="route_completed",
+            status="completed",
+            orchestrator="langgraph",
+            phase="route",
+            selected_role_ids=["job_scout", "jd_analyst"],
+        ),
+        ActivityEvent(
+            timestamp=(now - timedelta(seconds=190)).isoformat(),
+            run_id="run-routed",
+            kind="handoff_created",
+            status="completed",
+            orchestrator="langgraph",
+            phase="analysis",
+            source_role_ids=["job_scout"],
+            target_role_ids=["jd_analyst"],
+            output_excerpt="共享核验过的岗位",
+        ),
+        ActivityEvent(
+            timestamp=(now - timedelta(seconds=20)).isoformat(),
+            run_id="always-on",
+            kind="heartbeat",
+            status="idle",
+            orchestrator="always_on",
+            phase="patrol",
+            selected_role_ids=["job_scout"],
+            metrics={"next_patrol_in_seconds": 600.0},
+        ),
+    ]:
+        store.emit(event)
+    client = TestClient(create_app())
+
+    town = client.get("/api/town").json()
+    always_on = client.get("/api/always-on").json()
+
+    # The heartbeat must not become the current run and blank the routing view.
+    assert town["current_run_id"] == "run-routed"
+    edges = {
+        (route["kind"], route["source_role_id"], route["target_role_id"])
+        for route in town["routes"]
+    }
+    assert ("dispatch", "plaza", "job_scout") in edges
+    assert ("handoff", "job_scout", "jd_analyst") in edges
+    shift = next(item for item in town["shifts"] if item["role_id"] == "job_scout")
+    assert shift["state"] == "standby"
+    assert shift["display_name"] == "Job Scout"
+    # The watcher usually lives in another process, so this endpoint has to read
+    # the shift from the shared log rather than from its own status object.
+    assert always_on["running"] is False
+    assert always_on["shifts"][0]["role_id"] == "job_scout"
+    assert always_on["shifts"][0]["next_patrol_in_seconds"] == 600.0
+
+
+def test_console_is_served_as_static_files(tmp_path, monkeypatch):
+    """控制台是静态文件，不经过构建：这些路径少一个，前端就是白屏。
+
+    ``uv run job-agent-api`` 之外没有第二条启动命令，所以「能不能打开页面」只由
+    这个挂载决定；Dockerfile 里的 ``COPY web ./web`` 也必须把子目录一起带上。
+    """
+    monkeypatch.setenv("JOB_AGENT_DATA_DIR", str(tmp_path))
+    client = TestClient(create_app())
+
+    index = client.get("/")
+    assert index.status_code == 200
+    assert index.headers["content-type"].startswith("text/html")
+    # 侧边栏的六个页面
+    for page in ("town", "graph", "roles", "memory", "patrol", "replay"):
+        assert f'data-page="{page}"' in index.text
+
+    for path, prefix in [
+        ("/styles.css", "text/css"),
+        ("/app.js", "text/javascript"),
+        ("/chat.js", "text/javascript"),
+        ("/game/town-scene.js", "text/javascript"),
+        ("/vendor/phaser.min.js", "text/javascript"),
+        ("/assets/kenney/tiny-town.png", "image/png"),
+        ("/assets/kenney/tiny-dungeon.png", "image/png"),
+    ]:
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert response.headers["content-type"].startswith(prefix), path
+
+    # 静态挂载在最后，不能把 /api 吃掉。
+    assert client.get("/api/roles").status_code == 200

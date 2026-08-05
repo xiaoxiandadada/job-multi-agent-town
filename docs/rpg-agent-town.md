@@ -3,11 +3,16 @@
 ## 目标
 
 可视化借鉴 [Generative Agents](https://github.com/joonspk-research/generative_agents)
-的“小镇 + 角色活动”表达，但使用本项目原创的 HTML/CSS 精灵、建筑和求职语义。
+的“小镇 + 角色活动”表达，用 Phaser 3 和 Kenney 的 CC0 瓦片素材画成一张真正的
+像素地图，地图布局与求职语义是本项目原创的。
 Generative Agents 的核心是 observation、planning、reflection 与动态记忆检索。
 本项目把这套机制改写成求职工作流：角色不会模拟吃饭睡觉，而是围绕真实任务形成
 长期记忆、更新计划、交接证据并反思失败；网页仍然只展示真实运行状态，不播放
 伪造的预录动画。
+
+一条贯穿整个前端的规则：**页面拿不出对应 `ActivityEvent` 的连线，页面就不画。**
+所有位置、状态、气泡、连线、进度都能在 `data/runtime/activity.jsonl` 里逐条查到；
+没有事件支撑的动画一律不做，宁可让小镇看起来空。
 
 ## 生成式认知循环
 
@@ -38,25 +43,25 @@ API Key 或 App Secret。反思采用确定性摘要，不产生隐藏推理，�
 
 | 建筑 | role_id | LangGraph 阶段 |
 | --- | --- | --- |
-| 机会驿站 | `job_scout` | discovery |
-| JD 研究所 | `jd_analyst` | analysis |
-| 知识图书馆 | `job_knowledge_curator` | analysis |
-| 简历工坊 | `resume_strategist` | action |
-| 作品车库 | `portfolio_coach` | action |
-| 面试竞技场 | `interview_coach` | action |
-| 证据审判塔 | `judge` | judge |
+| Scout Outpost | `job_scout` | discovery |
+| JD Lab | `jd_analyst` | analysis |
+| Knowledge Library | `job_knowledge_curator` | analysis |
+| Resume Workshop | `resume_strategist` | action |
+| Portfolio Garage | `portfolio_coach` | action |
+| Interview Arena | `interview_coach` | action |
+| Evidence Court | `judge` | judge |
 | LangGraph Plaza | 调度中心 | route |
 
 ```mermaid
 flowchart LR
   Plaza["LangGraph Plaza"]
-  Scout["机会驿站"]
-  JD["JD 研究所"]
-  Knowledge["知识图书馆"]
-  Resume["简历工坊"]
-  Portfolio["作品车库"]
-  Interview["面试竞技场"]
-  Judge["证据审判塔"]
+  Scout["Scout Outpost"]
+  JD["JD Lab"]
+  Knowledge["Knowledge Library"]
+  Resume["Resume Workshop"]
+  Portfolio["Portfolio Garage"]
+  Interview["Interview Arena"]
+  Judge["Evidence Court"]
 
   Plaza --> Scout
   Scout --> JD
@@ -72,6 +77,39 @@ flowchart LR
   Interview --> Judge
 ```
 
+## 前端结构
+
+`web/` 是纯静态目录，由 FastAPI 在所有 `/api` 路由之后挂载
+（`StaticFiles(directory=ROOT/"web", html=True)`），没有 npm、Vite 或 TypeScript
+构建步骤，启动命令只有 `uv run job-agent-api` 一条。
+
+| 文件 | 职责 |
+| --- | --- |
+| `web/index.html` | 侧边栏、六个页面的骨架、浮动聊天窗 |
+| `web/styles.css` | 全部样式 |
+| `web/app.js` | ES module 入口：轮询 API、渲染五个数据页、页面路由 |
+| `web/chat.js` | 浮动聊天窗：把 `ActivityEvent` 翻译成对话行 |
+| `web/game/town-scene.js` | Phaser 场景：地图、建筑、角色精灵、连线、镜头 |
+| `web/vendor/phaser.min.js` | Phaser 3.90.0（MIT），传统 `<script>` 加载 |
+| `web/assets/kenney/` | Kenney Tiny Town / Tiny Dungeon 瓦片表（CC0） |
+
+素材来源与许可见 [`docs/asset-credits.md`](asset-credits.md)。
+
+侧边栏六个页面，当前页写入 URL hash，刷新和分享链接都不会被弹回首页：
+
+| 页面 | hash | 内容 |
+| --- | --- | --- |
+| 小镇 | `#town` | Phaser 全屏地图，拖拽平移、滚轮缩放、点建筑看角色 |
+| 路由与任务图 | `#graph` | 运行阶段、LangGraph 图定义、路由与交接、任务依赖图 |
+| 角色与模型 | `#roles` | 角色工作台、每角色模型、动态添加角色 |
+| 记忆与反思 | `#memory` | 所选角色的任务/日程/反思/记忆流，以及整镇时间线 |
+| 常驻巡检 | `#patrol` | 常驻班次卡与每一轮巡检、日报事件 |
+| 运行回放 | `#replay` | 历史 run 选择、时间步滑杆、运行表、最近输出 |
+
+浮动聊天窗在所有页面常驻。后端没有 SSE——`POST /api/runs` 只在整场跑完后返回一次
+`RunReport`，所以聊天窗不假装流式，而是从 1.5 秒一次的 `/api/activity` 轮询里按
+`event_id` 去重增量追加，每一行都能回查到事件。
+
 ## 真实状态来源
 
 编排器把以下事件追加到 `data/runtime/activity.jsonl`：
@@ -84,13 +122,15 @@ flowchart LR
 - `run_completed`、`run_failed`
 
 网页每 1.5 秒读取 `/api/activity`、`/api/town` 和任务图。`queued` 精灵聚集在
-Plaza，`running` 精灵移动到
-自己的建筑并显示输出气泡，`ok/error/timeout` 使用不同颜色。点击建筑可固定查看
-模型、延迟、角色日程、阶段反思与长期记忆。小镇时间线显示真实阶段、Agent 输出和
+Plaza，`running` 精灵回到
+自己的建筑并在侧面显示输出气泡，`ok/error/timeout` 使用不同色调。点击建筑会选中该
+角色：底部 HUD 立刻显示它的模型、延迟和当前输出，「记忆与反思」页同时跟着切到这个
+角色的日程、阶段反思与长期记忆。小镇时间线
+显示真实阶段、Agent 输出和
 discovery/analysis → action 的证据交接；`/api/town` 把 ActivityEvent 与 Memory Stream
 投影成每个角色的当前行动、计划和记忆流。API Key 与 App Secret 从不写入事件。
 
-工具栏可选择任一历史 run，并用时间步滑杆逐事件回放。回放调用
+「运行回放」页可选择任一历史 run，并用时间步滑杆逐事件回放。回放调用
 `/api/town?run_id=<run>&step=<n>`，只使用该 run 截至第 n 条的真实
 ActivityEvent；角色会按当时状态在 Plaza、自己的建筑与 Judge 路径间移动。历史
 回放不注入“未来”长期记忆，也不会编造对话或状态。
@@ -112,7 +152,7 @@ ActivityEvent；角色会按当时状态在 Plaza、自己的建筑与 Judge 路
 
 ## 动态角色与建筑
 
-网页“角色工作台”支持：
+网页“角色工作台”（`#roles`）支持：
 
 1. 从生信算法、数据科学、Agent 评测模板一键创建角色；
 2. 自定义 role ID、目标、prompt、触发词、工作阶段、建筑、图标和日程；
@@ -131,17 +171,18 @@ uv run job-agent-api
 open http://127.0.0.1:8000
 ```
 
-在网页输入任务并选择 `collaborative`，可观察：
+在右下角聊天窗输入任务并选择 `collaborative`，可观察：
 
 1. route 选择角色；
-2. 岗位侦察员先完成 discovery；
+2. Job Scout 先完成 discovery；
 3. JD 与岗位知识 Agent 并行分析；
 4. 三个 action Agent 在依赖满足后并行；
 5. Judge 完成证据审查；
-6. 任务面板显示依赖、验收标准和进度；
-7. 历史运行表保留模型、耗时和结果；
-8. 点击建筑查看该角色从过往运行形成的记忆流；
-9. 从小镇工具栏选择历史 run，拖动滑杆逐步回放路由、工作、交接和审核。
+6. 「路由与任务图」页显示依赖、验收标准和进度；
+7. 「运行回放」页保留模型、耗时和结果；
+8. 点击建筑查看该角色从过往运行形成的记忆流（在「记忆与反思」页）；
+9. 在「运行回放」页选择历史 run，拖动滑杆逐步回放路由、工作、交接和审核；
+10. 「常驻巡检」页显示 `job-agent-watch` 每一轮真实岗位核验的开始与结果。
 
 GitHub Pages 只能展示静态说明；要让小镇实时运行，需要 FastAPI Runtime 和模型 API。
 部署时可直接使用仓库的 Dockerfile。

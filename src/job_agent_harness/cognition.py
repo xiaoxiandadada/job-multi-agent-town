@@ -7,6 +7,7 @@ import re
 import threading
 import uuid
 from collections import Counter
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -15,6 +16,44 @@ from pydantic import BaseModel, Field
 
 
 MemoryKind = Literal["observation", "handoff", "plan", "reflection"]
+
+#: Kinds a query can retrieve. ``plan`` is written before the role has done
+#: anything, from a template, so it can only ever tell the model what its own
+#: config already says.
+RETRIEVABLE_KINDS: frozenset[str] = frozenset(
+    {"observation", "handoff", "reflection"}
+)
+
+#: Score weights. Relevance carries the most because the other two are nearly
+#: constant across this store: almost everything is recent (the roles run every
+#: few minutes) and ``estimate_importance`` gives most memories 0.5–1.0. A signal
+#: that does not vary cannot rank.
+RECENCY_WEIGHT = 0.22
+RELEVANCE_WEIGHT = 0.56
+IMPORTANCE_WEIGHT = 0.22
+
+#: Above this mutual overlap, two memories are the same memory for retrieval
+#: purposes. Tuned against the real store, where consecutive reflections differ
+#: only in which hostname they name.
+DUPLICATE_THRESHOLD = 0.82
+
+#: An ascii token mixing letters and digits: job ids (``J100679``), run ids,
+#: model versions, requisition numbers. In this corpus these are the only tokens
+#: that name one specific thing.
+IDENTIFIER_TOKEN = re.compile(
+    r"^(?=[a-z0-9_+.-]*[a-z])(?=[a-z0-9_+.-]*\d)[a-z0-9][a-z0-9_+.-]{4,}$"
+)
+
+#: How much more an identifier match is worth than an ordinary token of the same
+#: rarity. Needed because the tokenizer cuts Chinese into overlapping n-grams, so
+#: a 30-character question yields ~80 tokens and the rarest of them are phrasing
+#: artefacts ("之前核", "是什么") rather than content: on the real store those
+#: outweighed the job id being asked about 3.71 to 2.04, and rarity alone cannot
+#: tell them apart — the phrasing genuinely is rare in a corpus of job reports.
+#: Measured on the 12-case golden set, hit@4 is 0.833 at weight 1.0 and 1.000
+#: anywhere in 2.0–8.0, so this is a plateau rather than a fitted constant.
+IDENTIFIER_WEIGHT = 4.0
+
 DOMAIN_TERMS = (
     "Agent Evaluation",
     "golden set",
@@ -91,13 +130,86 @@ def _tokens(value: str) -> set[str]:
 
 
 def _similarity(left: str, right: str) -> float:
-    left_tokens = _tokens(left)
-    right_tokens = _tokens(right)
-    if not left_tokens or not right_tokens:
+    """Symmetric overlap, used for spotting near-duplicate memories.
+
+    Kept length-normalised on both sides on purpose: two texts are duplicates of
+    each other only if they are *mutually* similar. This is the wrong measure for
+    query relevance \u2014 see ``_relevance``.
+    """
+
+    return _token_similarity(_tokens(left), _tokens(right))
+
+
+def _token_similarity(left: set[str], right: set[str]) -> float:
+    """``_similarity`` for callers that already tokenised.
+
+    Retrieval compares every candidate against every memory already picked, so
+    re-tokenising 4000-character texts inside that loop would make the dedup pass
+    cost more than the ranking it filters.
+    """
+
+    if not left or not right:
         return 0.0
-    return len(left_tokens & right_tokens) / math.sqrt(
-        len(left_tokens) * len(right_tokens)
-    )
+    return len(left & right) / math.sqrt(len(left) * len(right))
+
+
+def inverse_document_frequency(
+    documents: list[set[str]],
+) -> dict[str, float]:
+    """How rare each token is in one role's own memory.
+
+    Without this, every token counts the same, and in a corpus of job reports
+    that means \u5c97\u4f4d and \u6838\u9a8c \u2014 which are in literally every memory \u2014 outvote the
+    one token that identifies the job being asked about. The store is small
+    enough (hundreds of memories) that computing this per retrieval is cheaper
+    than keeping an index in sync with an append-only file.
+    """
+
+    total = len(documents)
+    frequency: Counter[str] = Counter()
+    for tokens in documents:
+        frequency.update(tokens)
+    return {
+        token: math.log(1 + total / (1 + count))
+        for token, count in frequency.items()
+    }
+
+
+def _relevance(
+    query_tokens: set[str],
+    document_tokens: set[str],
+    idf: dict[str, float],
+) -> float:
+    """Share of the question, weighted by rarity, that this memory can answer.
+
+    Deliberately **asymmetric**. The previous measure divided by
+    ``sqrt(len(query) * len(document))``, which made the score depend mostly on
+    how long the memory was: a 4000-character report that quoted the exact job id
+    and its official link could not score above ~0.08, while a 33-character
+    "\u672c\u8f6e\u8ba1\u5212\uff1a\u2026" template reached 0.15 by sharing a few common characters. The
+    retriever was therefore anti-correlated with information content \u2014 it ranked
+    the store's most useful memories last, and the roles behaved as if they had
+    forgotten every job they had verified. A query's length is fixed, so
+    normalising by the query alone leaves a long, on-topic memory able to win.
+
+    Identifier tokens are weighted up (see ``IDENTIFIER_WEIGHT``). Tokens the
+    corpus does not contain at all fall out of the budget on their own, since
+    ``idf`` is built from the documents and ``.get`` returns 0 for the rest — an
+    unanswerable token should not lower every candidate's score.
+    """
+
+    if not query_tokens or not document_tokens:
+        return 0.0
+    weights = {
+        token: idf.get(token, 0.0)
+        * (IDENTIFIER_WEIGHT if IDENTIFIER_TOKEN.match(token) else 1.0)
+        for token in query_tokens
+    }
+    budget = sum(weights.values())
+    if budget <= 0:
+        return 0.0
+    matched = sum(weights[token] for token in query_tokens & document_tokens)
+    return min(1.0, matched / budget)
 
 
 def estimate_importance(text: str, kind: MemoryKind) -> float:
@@ -204,20 +316,41 @@ class MemoryStore:
         kind: MemoryKind | None = None,
         limit: int = 100,
     ) -> list[AgentMemory]:
+        values = [
+            memory
+            for memory in self._iter_memories()
+            if (role_id is None or memory.role_id == role_id)
+            and (kind is None or memory.kind == kind)
+        ]
+        return values[-max(1, min(limit, 2000)) :]
+
+    def list_by_role(self, *, limit: int = 100) -> dict[str, list[AgentMemory]]:
+        """Every role's last ``limit`` memories from one pass over the file.
+
+        ``list`` re-reads and re-validates the whole JSONL on every call, so a
+        caller that wants each role's memories — the town snapshot does, and the
+        dashboard polls it every 1.5 seconds — otherwise pays for one full parse
+        per role. Grouping cannot be expressed as a global ``limit`` on ``list``
+        without silently dropping roles whose memories are all older than the cut.
+        """
+
+        keep = max(1, min(limit, 2000))
+        buckets: dict[str, list[AgentMemory]] = {}
+        for memory in self._iter_memories():
+            bucket = buckets.setdefault(memory.role_id, [])
+            bucket.append(memory)
+            if len(bucket) > keep:
+                del bucket[0]
+        return buckets
+
+    def _iter_memories(self) -> Iterator[AgentMemory]:
         if not self.path.exists():
-            return []
-        values: list[AgentMemory] = []
+            return
         for line in self.path.read_text(encoding="utf-8").splitlines():
             try:
-                memory = AgentMemory.model_validate_json(line)
+                yield AgentMemory.model_validate_json(line)
             except (ValueError, json.JSONDecodeError):
                 continue
-            if role_id is not None and memory.role_id != role_id:
-                continue
-            if kind is not None and memory.kind != kind:
-                continue
-            values.append(memory)
-        return values[-max(1, min(limit, 2000)) :]
 
     def retrieve(
         self,
@@ -227,35 +360,77 @@ class MemoryStore:
         limit: int = 4,
         now: datetime | None = None,
     ) -> list[RetrievedMemory]:
+        """The few memories worth spending this role's context on.
+
+        Three things beyond scoring, all of them there because the store is
+        written by the same loop that reads it and therefore fills up with its
+        own output:
+
+        * ``plan`` memories are not candidates. They are generated from
+          ``RoleSpec.schedule`` *before* the role does anything, so they restate
+          static configuration the system prompt already contains — yet they were
+          40% of the real store and, being short, scored well.
+        * near-duplicates are suppressed, because reflections are written every
+          few observations and differ by a word or two. Four retrieval slots
+          filled with four spellings of the same sentence is the same as having
+          no memory at all.
+        * ranking is by ``(score, timestamp)``, with the timestamp only breaking
+          ties, so a fresh memory never outranks a relevant one.
+        """
+
         now = now or datetime.now(timezone.utc)
-        scored: list[RetrievedMemory] = []
-        for memory in self.list(role_id=role_id, limit=2000):
+        candidates = [
+            memory
+            for memory in self.list(role_id=role_id, limit=2000)
+            if memory.kind in RETRIEVABLE_KINDS
+        ]
+        document_tokens = [_tokens(memory.text) for memory in candidates]
+        idf = inverse_document_frequency(document_tokens)
+        query_tokens = _tokens(query)
+        scored: list[tuple[RetrievedMemory, set[str]]] = []
+        for memory, tokens in zip(candidates, document_tokens):
             timestamp = datetime.fromisoformat(memory.timestamp)
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=timezone.utc)
             age_hours = max(0.0, (now - timestamp).total_seconds() / 3600)
             recency = math.exp(-age_hours / (24 * 14))
-            relevance = _similarity(query, memory.text)
+            relevance = _relevance(query_tokens, tokens, idf)
             score = min(
                 1.0,
-                0.38 * recency
-                + 0.40 * relevance
-                + 0.22 * memory.importance,
+                RECENCY_WEIGHT * recency
+                + RELEVANCE_WEIGHT * relevance
+                + IMPORTANCE_WEIGHT * memory.importance,
             )
             scored.append(
-                RetrievedMemory(
-                    memory=memory,
-                    score=score,
-                    recency=recency,
-                    relevance=relevance,
-                    importance=memory.importance,
+                (
+                    RetrievedMemory(
+                        memory=memory,
+                        score=score,
+                        recency=recency,
+                        relevance=relevance,
+                        importance=memory.importance,
+                    ),
+                    tokens,
                 )
             )
-        return sorted(
-            scored,
-            key=lambda value: (value.score, value.memory.timestamp),
+        scored.sort(
+            key=lambda value: (value[0].score, value[0].memory.timestamp),
             reverse=True,
-        )[: max(0, min(limit, 20))]
+        )
+        wanted = max(0, min(limit, 20))
+        picked: list[RetrievedMemory] = []
+        picked_tokens: list[set[str]] = []
+        for item, tokens in scored:
+            if len(picked) >= wanted:
+                break
+            if any(
+                _token_similarity(tokens, chosen) >= DUPLICATE_THRESHOLD
+                for chosen in picked_tokens
+            ):
+                continue
+            picked.append(item)
+            picked_tokens.append(tokens)
+        return picked
 
     def ensure_plan(
         self,
