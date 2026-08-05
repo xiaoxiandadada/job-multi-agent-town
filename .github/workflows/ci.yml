@@ -16,12 +16,34 @@ jobs:
       - run: uv sync --extra dev --locked
       - run: uv run pytest
       - name: Validate dashboard JavaScript
-        run: sed -n '/<script>/,/<\\/script>/p' web/index.html | sed '1d;$d' | node --check
+        shell: bash
+        run: |
+          # The dashboard JS lives in its own files now, so parse those instead of
+          # scraping an inline <script> block out of index.html — that block no
+          # longer exists, so the old command piped 0 bytes into node and passed
+          # without checking anything. Vendored bundles are excluded; they are not
+          # ours to fix. Empty file list is a failure, so this cannot silently
+          # go back to checking nothing.
+          mapfile -t files < <(git ls-files 'web/*.js' 'web/**/*.js' | grep -v '^web/vendor/')
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No dashboard JavaScript found to validate."
+            exit 1
+          fi
+          # --input-type=module via stdin rather than `node --check <file>`: these
+          # files are ES modules, and plain --check treats a .js path as CommonJS
+          # on runners whose Node predates module auto-detection.
+          for f in "${files[@]}"; do
+            echo "check $f"
+            node --input-type=module --check < "$f"
+          done
       - name: Reject committed API keys
         shell: bash
         run: |
-          if git grep -qE 'sk-[A-Za-z0-9_-]{20,}' -- ':!uv.lock'; then
-            echo "Potential API key found in tracked files."
+          # Require a non-identifier character before sk- so ordinary names that
+          # happen to contain it (task-graph-progress-label) do not trip the gate.
+          if git grep -qE '(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}' -- ':!uv.lock'; then
+            echo "Potential API key found in tracked files:"
+            git grep -nE '(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}' -- ':!uv.lock'
             exit 1
           fi
       - run: docker build -t job-agent-studio:test .
