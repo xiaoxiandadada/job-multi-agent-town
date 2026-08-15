@@ -10,14 +10,14 @@ from job_agent_harness.cognition import (
 def test_memory_retrieval_combines_relevance_recency_and_importance(tmp_path):
     store = MemoryStore(tmp_path / "memories.jsonl")
     relevant = store.append(
-        role_id="portfolio_coach",
+        role_id="material_builder",
         run_id="run-1",
         kind="observation",
         text="Agent Evaluation 使用 golden set 与工具失败分类",
         importance=0.72,
     )
     store.append(
-        role_id="portfolio_coach",
+        role_id="material_builder",
         run_id="run-2",
         kind="observation",
         text="简历排版需要统一字体",
@@ -25,7 +25,7 @@ def test_memory_retrieval_combines_relevance_recency_and_importance(tmp_path):
     )
 
     results = store.retrieve(
-        role_id="portfolio_coach",
+        role_id="material_builder",
         query="如何构建 Agent Evaluation golden set",
         limit=2,
         now=datetime.now(timezone.utc) + timedelta(minutes=1),
@@ -40,24 +40,24 @@ def test_memory_store_creates_reflection_after_observation_threshold(tmp_path):
     store = MemoryStore(tmp_path / "memories.jsonl", reflection_interval=3)
     for index in range(2):
         store.append(
-            role_id="jd_analyst",
+            role_id="job_analyst",
             run_id=f"run-{index}",
             kind="observation",
             text=f"第 {index} 次分析 Agent 岗位，部分要求待核验",
         )
     assert store.maybe_reflect(
-        role_id="jd_analyst",
+        role_id="job_analyst",
         run_id="run-2",
     ) is None
 
     store.append(
-        role_id="jd_analyst",
+        role_id="job_analyst",
         run_id="run-2",
         kind="observation",
         text="第三次分析 Agent 岗位，发现评测指标缺口",
     )
     reflection = store.maybe_reflect(
-        role_id="jd_analyst",
+        role_id="job_analyst",
         run_id="run-2",
     )
 
@@ -65,7 +65,7 @@ def test_memory_store_creates_reflection_after_observation_threshold(tmp_path):
     assert reflection.kind == "reflection"
     assert "下一轮先核验" in reflection.text
     assert store.maybe_reflect(
-        role_id="jd_analyst",
+        role_id="job_analyst",
         run_id="run-3",
     ) is None
 
@@ -95,14 +95,14 @@ def test_reflection_uses_whole_domain_terms_and_treats_timeout_as_risk(
         "最重要的验收指标是角色信息可持久化",
     ):
         store.append(
-            role_id="portfolio_coach",
+            role_id="material_builder",
             run_id="run-1",
             kind="observation",
             text=text,
         )
 
     reflection = store.maybe_reflect(
-        role_id="portfolio_coach",
+        role_id="material_builder",
         run_id="run-1",
     )
 
@@ -180,7 +180,7 @@ def test_near_duplicate_memories_do_not_fill_every_slot(tmp_path):
     store = MemoryStore(tmp_path / "memories.jsonl")
     for index in range(4):
         store.append(
-            role_id="jd_analyst",
+            role_id="job_analyst",
             run_id=f"run-{index}",
             kind="reflection",
             text=(
@@ -191,14 +191,14 @@ def test_near_duplicate_memories_do_not_fill_every_slot(tmp_path):
             importance=0.95,
         )
     distinct = store.append(
-        role_id="jd_analyst",
+        role_id="job_analyst",
         run_id="run-9",
         kind="observation",
         text="简历第二版把分布式训练经验替换为多智能体编排作品证据。",
     )
 
     results = store.retrieve(
-        role_id="jd_analyst",
+        role_id="job_analyst",
         query="岗位与简历证据的进展",
         limit=4,
     )

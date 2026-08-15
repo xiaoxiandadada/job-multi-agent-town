@@ -186,17 +186,17 @@ def make_role(role_id: str, display_name: str, enabled: bool = True):
 def test_load_bot_bindings_supports_controller_and_named_role_bots():
     roles = {
         "job_scout": make_role("job_scout", "Job Scout"),
-        "jd_analyst": make_role("jd_analyst", "JD Analyst"),
+        "job_analyst": make_role("job_analyst", "Job Analyst"),
     }
     registry = SimpleNamespace(get=roles.__getitem__)
     env = {
         "LARK_APP_ID": "cli_controller",
         "LARK_APP_SECRET": "controller-secret",
-        "JOB_AGENT_FEISHU_ROLE_BOTS": "job_scout,jd_analyst",
+        "JOB_AGENT_FEISHU_ROLE_BOTS": "job_scout,job_analyst",
         "LARK_ROLE_JOB_SCOUT_APP_ID": "cli_scout",
         "LARK_ROLE_JOB_SCOUT_APP_SECRET": "scout-secret",
-        "LARK_ROLE_JD_ANALYST_APP_ID": "cli_jd",
-        "LARK_ROLE_JD_ANALYST_APP_SECRET": "jd-secret",
+        "LARK_ROLE_JOB_ANALYST_APP_ID": "cli_jd",
+        "LARK_ROLE_JOB_ANALYST_APP_SECRET": "jd-secret",
     }
 
     bindings = load_bot_bindings(registry, env)
@@ -204,7 +204,7 @@ def test_load_bot_bindings_supports_controller_and_named_role_bots():
     assert [binding.identity_label for binding in bindings] == [
         "controller",
         "job_scout",
-        "jd_analyst",
+        "job_analyst",
     ]
     assert bindings[1].display_name == "Job Scout"
 
@@ -212,24 +212,24 @@ def test_load_bot_bindings_supports_controller_and_named_role_bots():
 def test_load_bot_bindings_can_select_one_process_isolated_identity():
     roles = {
         "job_scout": make_role("job_scout", "Job Scout"),
-        "jd_analyst": make_role("jd_analyst", "JD Analyst"),
+        "job_analyst": make_role("job_analyst", "Job Analyst"),
     }
     registry = SimpleNamespace(get=roles.__getitem__)
     env = {
         "LARK_APP_ID": "cli_controller",
         "LARK_APP_SECRET": "controller-secret",
-        "JOB_AGENT_FEISHU_ROLE_BOTS": "job_scout,jd_analyst",
-        "JOB_AGENT_FEISHU_BINDING": "jd_analyst",
+        "JOB_AGENT_FEISHU_ROLE_BOTS": "job_scout,job_analyst",
+        "JOB_AGENT_FEISHU_BINDING": "job_analyst",
         "LARK_ROLE_JOB_SCOUT_APP_ID": "cli_scout",
         "LARK_ROLE_JOB_SCOUT_APP_SECRET": "scout-secret",
-        "LARK_ROLE_JD_ANALYST_APP_ID": "cli_jd",
-        "LARK_ROLE_JD_ANALYST_APP_SECRET": "jd-secret",
+        "LARK_ROLE_JOB_ANALYST_APP_ID": "cli_jd",
+        "LARK_ROLE_JOB_ANALYST_APP_SECRET": "jd-secret",
     }
 
     bindings = load_bot_bindings(registry, env)
 
     assert [binding.identity_label for binding in bindings] == [
-        "jd_analyst"
+        "job_analyst"
     ]
 
 
@@ -261,9 +261,9 @@ def test_load_bot_bindings_rejects_missing_role_credentials():
 
 
 def test_role_bot_env_names_are_stable():
-    assert role_bot_env_names("job_knowledge_curator") == (
-        "LARK_ROLE_JOB_KNOWLEDGE_CURATOR_APP_ID",
-        "LARK_ROLE_JOB_KNOWLEDGE_CURATOR_APP_SECRET",
+    assert role_bot_env_names("job_analyst") == (
+        "LARK_ROLE_JOB_ANALYST_APP_ID",
+        "LARK_ROLE_JOB_ANALYST_APP_SECRET",
     )
 
 
@@ -271,10 +271,10 @@ def test_configured_role_bot_ids_are_deduplicated_in_order():
     assert configured_role_bot_ids(
         {
             "JOB_AGENT_FEISHU_ROLE_BOTS": (
-                "job_scout,jd_analyst,job_scout"
+                "job_scout,job_analyst,job_scout"
             )
         }
-    ) == ["job_scout", "jd_analyst"]
+    ) == ["job_scout", "job_analyst"]
 
 
 def test_bound_bot_routes_plain_question_to_its_role():

@@ -826,6 +826,7 @@ def register_message_handler(
             mode=command.mode,
             use_judge=binding.role_id != "judge",
             images=images,
+            timeout_seconds=command.timeout_seconds,
         )
 
         async def notify(note: str) -> None:

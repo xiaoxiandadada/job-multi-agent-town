@@ -67,7 +67,7 @@ async def test_a_generated_brief_gives_every_role_something_to_push():
     """The real contract: the digest builders must recognise what we wrote.
 
     ``build_role_daily_digests`` matches ``##`` headings by exact string, so a
-    generated brief whose headings drift produces seven messages that all say
+    generated brief whose headings drift produces one message per role that says
     "今天的日报没有识别到该角色对应的新内容" — a push that technically succeeds and
     tells the user nothing.
     """
@@ -77,7 +77,7 @@ async def test_a_generated_brief_gives_every_role_something_to_push():
     markdown = await generate_daily_markdown(orchestrator, "2026-08-05")
     digests = build_role_daily_digests(markdown, "2026-08-05")
 
-    assert len(digests) == 7
+    assert len(digests) == 6
     for role_id, message in digests.items():
         assert "没有识别到该角色对应的新内容" not in message, role_id
 
@@ -88,8 +88,8 @@ async def test_every_generation_run_is_marked_as_background_work():
     await generate_daily_markdown(orchestrator, "2026-08-05")
 
     assert len(orchestrator.requests) == len(DAILY_SECTIONS)
-    # Seven single-role runs back to back. Unmarked, each would take over the
-    # page's one "current run" slot in turn (see town.background_run_ids).
+    # One single-role run per section, back to back. Unmarked, each would take
+    # over the page's one "current run" slot (see town.background_run_ids).
     assert {request.origin for request in orchestrator.requests} == {"schedule"}
     assert {request.mode for request in orchestrator.requests} == {"single"}
     assert not any(request.use_judge for request in orchestrator.requests)

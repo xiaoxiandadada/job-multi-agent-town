@@ -39,12 +39,10 @@
 | 角色 | 输入 | 输出 | 默认触发 |
 | --- | --- | --- | --- |
 | Job Scout | 方向、城市、届别 | 可核验岗位候选 | 岗位、秋招、校招 |
-| JD Analyst | JD | 关键词、硬要求、缺口 | JD、职责、要求 |
-| Job Knowledge Curator | JD、目标方向 | 知识地图、技术栈、面试题与学习优先级 | 岗位知识、技术栈、Agent、AI for Science、生信 |
-| Resume Strategist | JD、简历证据 | 简历版本、bullet | 简历、bullet |
-| Portfolio Coach | 目标岗位、项目 | MVP、证据、指标 | 作品、项目 |
+| Job Analyst | JD、目标方向 | 关键词、硬要求、缺口，以及缺口对应的知识地图、技术栈与面试题 | JD、职责、要求、技术栈、能力地图 |
+| Material Builder | JD、简历与项目证据 | 简历版本与 bullet；作品 MVP、证据、指标 | 简历、bullet、作品、项目 |
 | Interview Coach | JD、缺口 | 问题、追问、评分表 | 面试、题目 |
-| Judge | 所有结构化结果 | 冲突、证据、最终建议 | 每次聚合 |
+| Judge | 所有结构化结果 | 冲突、证据、最终建议 | 多角色产出需交叉核对时 |
 
 ## 当前框架与调用链
 
@@ -75,55 +73,160 @@
 情况下做公平对照。
 
 LangGraph 把工作流建模成 `State + Nodes + Edges`：State 保存当前任务快照，Node
-执行角色或确定性逻辑，Edge 决定下一步；并行节点处在同一个 super-step。官方
-Persistence/Checkpoint 还能支持对话记忆、故障恢复、回放和人工审批 interrupt。
+执行角色或确定性逻辑，Edge 决定下一步。官方 Persistence/Checkpoint 支持对话记忆、
+故障恢复、回放和人工审批 interrupt。
 
-当前求职图实现为：
+### 真实的图结构
+
+下面这张图是 `LangGraphOrchestrator.mermaid()` 的直接输出（`graph.get_graph()
+.draw_mermaid()`），不是手画的示意图。**虚线是条件边，实线是固定边**：
 
 ```text
-START
-  |
- route
-  |
-  +-- job_scout ----------> discovery_phase
-  |                                  |
-  |                         analysis_phase
-  |                         /            \
-  |                  jd_analyst     knowledge_curator
-  |                         \            /
-  +--------------------------> action_phase
-                             /      |       \
-                         resume  portfolio  interview
-                             \      |       /
-                                judge --> END
+__start__ ──▶ route
+route           ┈▶ discovery_phase │ analysis_phase │ action_phase │ judge
+discovery_phase ┈▶ analysis_phase  │ action_phase   │ judge
+analysis_phase  ┈▶ action_phase    │ judge
+action_phase    ──▶ judge
+judge           ──▶ __end__
 ```
 
-- `route`：规则选择角色，不消耗模型。
-- `discovery_phase`：Job Scout 先核验中国 2027 届正式校招机会。
-- `analysis_phase`：JD Analyst 与 Knowledge Curator 基于侦察结果并行。
-- `action_phase`：简历、作品、面试角色基于 discovery + analysis 结果并行。
-- `judge`：证据审核与最终排版。
-- Graph State：请求、分阶段角色 ID/结果、最终输出和是否调用 Judge。
-- `thread_id`：与 run ID 对齐，为 checkpoint、恢复和多轮追问预留。
+注意这不是一条流水线：`route` 可以**直接跳到任何阶段**。空阶段被跳过而不是跑一个
+什么都不做的节点——只派了 Material Builder 的一次运行，`route` 直接进 `action_phase`，
+`discovery_phase` 和 `analysis_phase` 从未执行。
 
-每个 run 同时创建独立任务 DAG。节点包含 `task_id`、`role_id`、`phase`、
-`depends_on`、验收标准、模型、输出摘要、错误和 0–100% 进度。依赖未满足时是
-`blocked`，满足后转为 `ready/running`，最终为 `completed/error/timeout`。
-RPG 页面直接读取这张任务图，不根据精灵状态猜测依赖。
+- `route`：消费 Chief of Staff 的拆解结果选角色；拆解失败时回退关键词。不消耗模型。
+- `discovery_phase`：Job Scout 核验岗位。
+- `analysis_phase`：Job Analyst 基于侦察结果拆要求并补知识。
+- `action_phase`：材料产出与面试角色基于 discovery + analysis 的结果工作。
+- `judge`：按需触发的证据审核与最终排版（见「Judge 按需触发」）。
 
-当前图使用 `InMemorySaver` 保存进程内 checkpoint，并把跨进程可读的
-`ActivityEvent` 追加到 `data/runtime/activity.jsonl`，网页每 1.5 秒聚合展示
-每个角色的 running/ok/error/timeout、模型、耗时和输出摘要。需要跨重启恢复时应换
-SQLite/Postgres checkpointer。需要人工确认投递、修改简历或发送材料时，可以在
-副作用节点前用 `interrupt()` 暂停，用户在飞书点击确认后再用相同 `thread_id`
-恢复。这样 LangGraph 的价值在“可恢复状态”，而不是简单替代一次
-`asyncio.gather`。
+### 三种机制，都不是 callback
 
-LangGraph checkpoint 与角色长期记忆是两个不同层次：
+**这个项目没有使用 LangChain 的 callback handler 体系**——没有 `BaseCallbackHandler`，
+没有 `callbacks=[...]`。`langgraph_orchestrator.py` 里 grep 不到 `callback`。
+它靠三样东西串起来：
 
-- checkpoint 保存一次 graph/thread 执行到哪个 Node；
-- `MemoryStore` 保存角色跨 run 可复用的经验；
-- ActivityEvent 是给网页和审计使用的不可变运行轨迹。
+**一、条件边 + 路由函数。** 这是最接近「回调」的东西：`add_conditional_edges`
+注册一个纯函数，LangGraph 在节点执行完后调用它，用返回的字符串查映射表决定下一跳。
+
+```python
+builder.add_conditional_edges(
+    "route", self._after_route,
+    {"discovery_phase": "discovery_phase", "analysis_phase": "analysis_phase",
+     "action_phase": "action_phase", "judge": "judge"},
+)
+
+@staticmethod
+def _after_route(state) -> str:
+    if state.get("discovery_role_ids"): return "discovery_phase"
+    if state.get("analysis_role_ids"):  return "analysis_phase"
+    if state.get("action_role_ids"):    return "action_phase"
+    return "judge"
+```
+
+三个路由函数（`_after_route` / `_after_discovery` / `_after_analysis`）都是
+`@staticmethod` 纯函数，只读 state 不写、不调模型、不产生副作用。
+
+**二、状态合并。** 节点返回 dict，LangGraph 合并进 state：
+
+```python
+async def _discovery_phase(self, state) -> dict:
+    ...
+    return {"discovery_results": [r.model_dump() for r in results]}
+```
+
+`JobAgentGraphState` 是 `TypedDict, total=False`，字段全是普通类型——**没有一个
+`Annotated[list, add]` 这样的 reducer**，所以合并语义是**覆盖**而不是累加。这安全的
+唯一原因是下一节：没有两个分支会同时写同一个 key。
+
+**三、观测靠 `_record()`，不靠 LangGraph。** 每个节点直接调
+`self.base._record(...)` 往 `data/runtime/activity.jsonl` 追加 `ActivityEvent`。
+这是网页、回放、小镇连线的唯一数据源。选它而不选 callback handler 的实际后果：事件
+**跨进程可读**（API、飞书 bot、日报进程共享同一个文件），而 callback handler 只活在
+自己进程的内存里。
+
+### LangGraph 在这里不做并行
+
+看图就知道：**全部是串行**。没有 fan-out，没有一个节点分裂成多个并发分支。
+
+阶段内部的并发是在**节点函数内部**用 `asyncio.gather` 做的（`_run_parallel`），
+LangGraph 完全不知道有这回事——它只看到「一个节点，跑了一段时间，返回一个 dict」。
+所以文档里说 `action_phase` 的两个角色「并行」，指的是 asyncio 的并行，不是 LangGraph
+的 super-step 并行。后者在本项目**没有被用到**。
+
+这解释了两件事：为什么不需要 reducer（不会有并发写冲突），以及「为什么用 LangGraph」
+的真实答案——不是为了并行（`asyncio.gather` 已经够了），而是为了 checkpoint 和显式的
+状态图。实测编排开销约 10.6 ms（见下方性能对照），纯 asyncio baseline 保留着做对照。
+
+### 跨节点只传 role_id，不传对象
+
+`JobAgentGraphState` 的字段全是 `list[str]` 和 `list[dict]`——没有 `RoleSpec` 对象。
+所以每个节点都要重新从 registry 读角色：
+
+```python
+roles = [self.base.role_for_run(role_id, request)
+         for role_id in state.get("action_role_ids", [])]
+```
+
+**这意味着 per-run 的覆盖必须在每个节点重新施加一遍**，`apply_run_overrides` 的
+docstring 记的就是这个坑：常驻巡检把超时从 45 s 放宽到 300 s，如果 action 节点重读
+角色时不重新施加，覆盖会在 route 和 action 之间静默消失，巡检仍然死在角色自己的超时上。
+
+`/today` 的 300 s 超时能穿透整条链路，靠的正是这个机制。
+
+### checkpoint 的现状与限制
+
+当前用 `InMemorySaver`，**进程重启即失效**。`thread_id` 与 `run_id` 对齐，为跨重启
+恢复和多轮追问预留了接口，但要真正做到需要换 SQLite/Postgres checkpointer。
+
+需要人工确认投递、修改简历或发送材料时，可以在副作用节点前用 `interrupt()` 暂停，
+用户在飞书点击确认后再用相同 `thread_id` 恢复——这是 LangGraph 相对
+`asyncio.gather` 的真实增量，也是投递 Agent 落地时会用到的那条路。目前这条路还没打通，
+因为它依赖上面那个持久化 checkpointer。
+
+### 四套状态，容易混在一起看
+
+同一次运行里有四种「状态」，生命周期和存储位置都不同。混淆它们是读这套代码最容易走
+偏的地方：
+
+| 状态 | 存在哪 | 活多久 | 谁读它 |
+| --- | --- | --- | --- |
+| **图状态** `JobAgentGraphState` | 进程内存 + `InMemorySaver` checkpoint | 一次运行，进程重启即失效 | LangGraph 自己，节点之间 |
+| **任务图** `TaskNode.status` | `data/runtime/task_graphs/<run_id>.json` | 永久 | `#graph` 页、小镇依赖连线 |
+| **事件流** `ActivityEvent` | `data/runtime/activity.jsonl`（append-only） | 永久，不可变 | `#town` / `#replay`、审计 |
+| **长期记忆** `AgentMemory` | `data/runtime/memories.jsonl` | 跨运行 | 角色执行前的检索 |
+
+前两个是**可变的当前状态**，后两个是**不可变的历史**。具体说：
+
+- checkpoint 记「这次图跑到哪个 Node」；
+- 任务图记「哪个任务的依赖满足了、能开始了」；
+- 事件流记「发生过什么」，永不删行；
+- `MemoryStore` 记「这个角色跨运行可复用的经验」。
+
+**任务图的状态机**（`tasks.py`）是用户在 `#graph` 页看到的那个：
+
+```text
+blocked ──依赖全部 completed──▶ ready ──开始执行──▶ running ──▶ completed
+                                                          └──▶ error / timeout
+```
+
+`TaskGraphStore._recompute()` 在每次写入时重算：遍历所有节点，把「依赖全部
+completed」的从 `blocked` 提成 `ready`，再按状态集合推导整图的
+`queued / running / partial / completed / error`。节点带 `task_id`、`role_id`、
+`phase`、`depends_on`、验收标准、模型、输出摘要、错误和 0–100% 进度。RPG 页面直接读
+这张图，**不根据精灵状态猜依赖**。
+
+存储用 fcntl 排他锁 + 临时文件原子替换，因为 API 进程、飞书 bot、日报进程共享同一个
+持久卷。
+
+**任务图只画运行真正会遵守的依赖。** Planner 能表达 `depends_on`，但 collaborative 的
+执行顺序是按 `workflow_stage` 硬分三阶段的，所以 `build_run_task_graph` 用
+`PHASE_ORDER` 过滤，只保留**跨阶段**的边。两个同阶段角色之间的 planner 边不会被画出来
+——它们实际是并发跑的，画上去等于告诉用户 A 等了 B，而 A 根本没等。
+
+事件流的读取是从文件**尾部反向按块读**（`ActivityStore.read`），取够 `limit` 条就停。
+原因很实际：常驻巡检心跳占了行数的 66%，「读整个文件再截尾」的成本会随进程运行时长
+无上限增长。
 
 角色执行前，Runtime 从 `memories.jsonl` 取 top-k 记忆，score 为
 `0.22 × recency + 0.56 × relevance + 0.22 × importance`。检索结果只作为
@@ -198,36 +301,52 @@ Mock 对照中，同一 5-worker + Judge 任务的最新一次结果为：`async
    |
    +--> Job Scout                  发现与核验
             |
-            +--> JD Analyst -------+
-            +--> Knowledge Curator-+  分析阶段并行
-                                    |
-                         上游结果合并为带证据上下文
+            +--> Job Analyst           要求拆解 + 知识补充
                            |
-   +--> Resume Strategist-+
-   +--> Portfolio Coach --+  第二阶段并行
-   +--> Interview Coach --+
+                 上游结果合并为带证据上下文
                            |
-                         Judge
+   +--> Material Builder -+
+   +--> Interview Coach --+  第二阶段并行
+                           |
+                    Judge（按需触发）
                            |
                    最终回复 + Run Metrics
 ```
 
-命令预设只选择所需角色。例如 `/job` 只执行 discovery/analysis 三个角色，`/apply` 先执行
-JD 与岗位知识，再把结果交给简历和作品角色；`/team` 才运行六个工作角色。这样能
-避免无关 Agent 消耗延迟和额度。
+命令预设只选择所需角色。例如 `/job` 只执行 discovery/analysis 两个角色，`/apply` 先做
+岗位分析，再把结果交给材料产出角色；`/team` 才运行四个工作角色。普通消息则由
+Chief of Staff 的拆解决定，通常比任何预设都窄。这样能避免无关 Agent 消耗延迟和额度。
 
 直接 `@` 某个角色或使用 `/ask <role_id>` 时仍可调用 Judge，但最终输出契约不同：
 专家完整正文放在前面，Judge 只追加证据纠错，不允许覆盖或压缩专家回答，也不得混入
 与当前问题无关的日报内容。消息合并时会自动闭合未成对的 Markdown 代码围栏。
 
-角色配置中的 `tools` 现在是真的会执行的能力，不再只是元数据。`tools` 含
-`web_search` 的角色会拿到 Claude 服务端 `web_search_20260209` /
-`web_fetch_20260209`；网关不支持（显式 400，或收下工具却一次都不执行）时，同一次
-请求会自动降级到本地 Tool Executor—— `list_tracked_jobs` 读岗位表，`fetch_url`
-按域名白名单抓官方页，抓到的正文原样进上下文。两条路径都会把真实 URL 汇总进
-「联网来源（本次真实抓取）」，抓不到就必须写「页面未标注」或「正文需人工核验」，
-不允许用记忆里的内容顶替。本地证据仍由 `RoleContextProvider` 按角色从当天日报、
-岗位表、学习计划、简历/作品材料中注入。
+角色配置中的 `tools` 现在是真的会执行的能力，不再只是元数据，而且可以按工具名单独授予：
+
+| `tools` 写法 | 角色拿到什么 |
+| --- | --- |
+| `web_search` | 广义授权：Claude 服务端 `web_search_20260209` / `web_fetch_20260209`；网关不支持（显式 400，或收下工具却一次都不执行）时，同一次请求自动降级到本地 Tool Executor 的**全套**两个工具 |
+| `list_tracked_jobs` | 只读岗位表。能拿到真实公司、岗位全名、官方链接和投递状态，但不能上网 |
+| `fetch_url` | 只按域名白名单抓页面。用来核验别人给出的链接，不能自己发现新岗位 |
+| `local_docs` | 不是可调用工具，而是让 `RoleContextProvider` 注入该角色的静态资料包 |
+
+当前分配：
+
+| 角色 | 工具 | 为什么 |
+| --- | --- | --- |
+| Job Scout | `web_search` + `local_docs` | 发现就是它的全部工作，需要开放搜索 |
+| Job Analyst | `web_search` + `local_docs` | 读上游找到的页面，并核查技术栈事实 |
+| Material Builder | `list_tracked_jobs` + `local_docs` | 按真实岗位关键词写 bullet，但没有理由去搜新岗位 |
+| Interview Coach | `local_docs` | 题目来自 JD 和用户项目，都已在资料包里；给它搜索会招来假「真题」 |
+| Evidence Judge | `fetch_url` + `local_docs` | **能真的打开上游引用的链接核验断言**，但拿不到 `list_tracked_jobs`——那会让它引入没人提过的岗位，正好违反它自己的契约 |
+
+窄授权会连带改变提示词，这不是可选的润色：
+
+- 只有 `fetch_url` 时，工具说明改为「抓取**上文已经出现过**的链接」。默认措辞写的是「只能抓 `list_tracked_jobs` 返回的链接」，而 Judge 没有那个工具——照抄会让它唯一的来源指向一个拿不到的东西。
+- 「输出具体度要求」（必须逐条给出公司+岗位全名+岗位 ID+JD 原文摘录）**只在角色同时持有两个工具时**追加。持有全套意味着它的任务是产出岗位条目；窄授权意味着它在核验或读表，已经有自己的输出契约——给 Judge 拼上这段会和「输出审核结论、被删除的说法、行动清单」直接冲突，模型只能二选一。
+
+两条联网路径都会把真实 URL 汇总进「联网来源（本次真实抓取）」，抓不到就必须写「页面未标注」或
+「正文需人工核验」，不允许用记忆里的内容顶替。
 
 ## 分角色模型解析
 
@@ -245,8 +364,8 @@ API `GET /api/models` 返回 profile、角色 override 与最终解析模型；�
 
 当前生产分层是：
 
-- 岗位侦察、JD、简历、作品、面试、Judge：`claude-sonnet-5`；
-- Knowledge Curator：`claude-opus-5`（Claude 5）；
+- 岗位侦察、材料产出、面试、Chief of Staff 的三个环节：`claude-sonnet-5`；
+- Job Analyst 与 Judge：`claude-opus-5`；
 - 角色知识 prompt 约束为能力地图、定义/直觉、架构、技术选型、生产故障、评测、
   面试问题、30/60/120 分钟学习路径和 GitHub 作品证据。
 
@@ -259,8 +378,8 @@ API `GET /api/models` 返回 profile、角色 override 与最终解析模型；�
 ```text
 Feishu App: Chief of Staff -> Controller / 自动路由
 Feishu App: Job Scout        -> job_scout
-Feishu App: JD Analyst          -> jd_analyst
-Feishu App: Resume Strategist          -> resume_strategist
+Feishu App: Job Analyst      -> job_analyst
+Feishu App: Material Builder -> material_builder
 ...
                                   |
                                   v
@@ -308,20 +427,27 @@ Feishu App: Resume Strategist          -> resume_strategist
 
 ## 性能设计
 
-1. **规则先路由**：关键词和显式选择能确定角色时不调用 Router LLM。
+1. **拆解先于派单**：Chief of Staff 一次模型调用把请求拆成最多 3 个子任务，
+   决定派谁、谁依赖谁、要不要 Judge。显式指定角色（角色机器人、`/ask <role_id>`）
+   跳过拆解；拆解失败退回关键词路由，两者都会在事件流里标明来源。
 2. **按需 fan-out**：单一问题只跑一个专家；跨领域任务才并行多个专家。
-3. **上下文隔离**：每个 Agent 只收到自己的 system prompt、相关 JD/简历片段，
+   关键词路由做不到这点——`trigger_keywords` 天然重叠，"这个岗位的 JD" 会同时命中
+   Job Scout 和 Job Analyst，每个角色各写一份全长回答。
+3. **Judge 按需触发**：多个角色的产出需要交叉核对时必审；单角色回答由拆解决定，
+   因为那种情况 Judge 只是追加一段证据补充（见 `merge_judged_output`）。
+4. **上下文隔离**：每个 Agent 只收到自己的 system prompt、相关 JD/简历片段，
    不复制整段历史。
-4. **并发上限**：用 semaphore 限制并发，避免 API 限流和尾延迟爆炸。
-5. **超时与降级**：角色超时不阻塞整体；Judge 可基于已完成结果生成部分报告。
-6. **模型分层**：普通工作角色使用低延迟 reliable 模型；岗位知识角色通过
-   role-specific override 使用更强模型；Judge 使用独立 profile。只有知识节点承担
-   更强模型成本，不拖慢 discovery 和 action 的其他并行节点。
-7. **缓存**：按规范化 JD hash 缓存解析；相同简历/JD 组合复用证据抽取。
-8. **结构化输出**：Pydantic/JSON Schema 降低重试和解析失败。
-9. **可观测性**：每个 run 记录 wall latency、agent latency、token、错误、重试和
+5. **并发上限**：用 semaphore 限制并发，避免 API 限流和尾延迟爆炸。
+6. **超时与降级**：角色超时不阻塞整体；Judge 可基于已完成结果生成部分报告。
+7. **模型分层**：普通工作角色使用低延迟 reliable 模型；岗位分析角色使用更强模型；
+   Judge 使用独立 profile。只有这两个节点承担更强模型成本，不拖慢同阶段内由
+   `asyncio.gather` 并发执行的其他角色（注意这是 asyncio 的并发，不是 LangGraph 的
+   super-step——见「LangGraph 在这里不做并行」）。
+8. **缓存**：按规范化 JD hash 缓存解析；相同简历/JD 组合复用证据抽取。
+9. **结构化输出**：Pydantic/JSON Schema 降低重试和解析失败。
+10. **可观测性**：每个 run 记录 wall latency、agent latency、token、错误、重试和
    model profile，不记录 API Key。
-10. **可恢复执行**：LangGraph 模式用 checkpointer 保存阶段状态；后续把飞书会话
+11. **可恢复执行**：LangGraph 模式用 checkpointer 保存阶段状态；后续把飞书会话
     映射为 `thread_id`，支持断点恢复和多轮追问。
 
 ## Benchmark 设计

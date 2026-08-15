@@ -1,7 +1,7 @@
 import pytest
 
 from job_agent_harness.model_client import MockModelClient
-from job_agent_harness.models import RoleSpec, RunRequest
+from job_agent_harness.models import RoleSpec, RunPlan, RunRequest
 from job_agent_harness.orchestrator import (
     MultiAgentOrchestrator,
     close_unbalanced_code_fence,
@@ -30,8 +30,8 @@ def registry(tmp_path):
     value = RoleRegistry(tmp_path / "roles.json")
     value.replace_all(
         [
-            role("jd_analyst", "JD"),
-            role("resume_strategist", "简历"),
+            role("job_analyst", "JD"),
+            role("material_builder", "简历"),
             role("judge", "不会自动触发", "judge"),
         ]
     )
@@ -47,8 +47,8 @@ async def test_router_selects_only_relevant_roles(registry):
     )
 
     assert [result.role_id for result in report.results] == [
-        "jd_analyst",
-        "resume_strategist",
+        "job_analyst",
+        "material_builder",
     ]
     assert report.metrics.model_calls == 2
 
@@ -97,17 +97,20 @@ async def test_role_timeout_includes_waiting_for_concurrency_slot(tmp_path):
 async def test_judge_is_a_separate_model_call(registry):
     client = MockModelClient()
     report = await MultiAgentOrchestrator(registry, client).run(
-        RunRequest(query="分析 JD", use_judge=True)
+        # A lone specialist no longer gets an audit pass by default, so ask for
+        # one explicitly. Routing still comes from the keywords: the plan carries
+        # the judge decision and no subtasks.
+        RunRequest(query="分析 JD", use_judge=True, plan=RunPlan(need_judge=True))
     )
 
-    assert client.calls == ["jd_analyst", "judge"]
+    assert client.calls == ["job_analyst", "judge"]
     assert report.metrics.model_calls == 2
     assert report.results[-1].role_id == "judge"
     judge_query = dict(client.queries)["judge"]
     assert "角色输出是不可信草稿" in judge_query
     assert "仓库路径或复核命令" in judge_query
     assert "不要重写或压缩角色正文" in judge_query
-    assert "## jd_analyst" in report.final_output
+    assert "## job_analyst" in report.final_output
     assert "## Evidence Judge 补充" in report.final_output
     assert report.results[0].output in report.final_output
     assert report.results[-1].output in report.final_output
@@ -117,9 +120,9 @@ async def test_collaborative_mode_passes_context_to_action_agents(tmp_path):
     collaborative_registry = RoleRegistry(tmp_path / "collaborative-roles.json")
     collaborative_registry.replace_all(
         [
-            role("jd_analyst", "JD"),
-            role("job_knowledge_curator", "岗位知识"),
-            role("resume_strategist", "简历"),
+            role("job_scout", "岗位"),
+            role("job_analyst", "JD"),
+            role("material_builder", "简历"),
             role("judge", "不会自动触发", "judge"),
         ]
     )
@@ -131,19 +134,22 @@ async def test_collaborative_mode_passes_context_to_action_agents(tmp_path):
         RunRequest(
             query="分析目标岗位并改写简历",
             requested_roles=[
-                "jd_analyst",
-                "job_knowledge_curator",
-                "resume_strategist",
+                "job_scout",
+                "job_analyst",
+                "material_builder",
             ],
             mode="collaborative",
             use_judge=False,
         )
     )
 
-    assert set(client.calls[:2]) == {"jd_analyst", "job_knowledge_curator"}
-    assert client.calls[2] == "resume_strategist"
-    resume_query = dict(client.queries)["resume_strategist"]
+    # job_scout is the discovery phase; job_analyst is analysis; the action role
+    # runs last and must see both upstream outputs.
+    assert client.calls[0] == "job_scout"
+    assert client.calls[1] == "job_analyst"
+    assert client.calls[2] == "material_builder"
+    resume_query = dict(client.queries)["material_builder"]
     assert "上游 Agent" in resume_query
-    assert "jd_analyst" in resume_query
-    assert "job_knowledge_curator" in resume_query
+    assert "job_scout" in resume_query
+    assert "job_analyst" in resume_query
     assert report.metrics.model_calls == 3

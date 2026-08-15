@@ -314,8 +314,11 @@ h2 { margin: 0; font-size: 19px; letter-spacing: -.025em; }
   display: flex; justify-content: space-between; gap: 8px; padding-top: 12px;
   border-top: 1px solid var(--line); color: var(--muted); font: 10px ui-monospace, monospace;
 }
-.agent-model-config { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; margin-bottom: 10px; }
-.agent-model-config input { min-width: 0; margin: 0; padding: 7px 8px; font-size: 9px; }
+/* Model, effort, apply. The model name is the only part that needs room to
+   grow, so it takes the flexible column and the other two size to content. */
+.agent-model-config { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; margin-bottom: 10px; }
+.agent-model-config input, .agent-model-config select { min-width: 0; margin: 0; padding: 7px 8px; font-size: 9px; }
+.agent-model-config select { width: auto; }
 .agent-model-config button { padding: 7px 8px; }
 
 /* ── 表单元素 ──────────────────────────────────────────── */

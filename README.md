@@ -57,7 +57,12 @@ uv run pytest
 分析这个 AI Agent 岗位并制定面试准备
 ```
 
-系统会按关键词自动选出相关角色。也可以贴图（JD 截图、简历截图），一次最多 9 张。
+Chief of Staff 先把请求拆成最多 3 个子任务再派单，所以一句话通常只唤起一到两个角色，
+而不是所有关键词沾边的角色。也可以贴图（JD 截图、简历截图），一次最多 9 张。
+
+要跑完整的每日流程，用 `/today`（不带参数即可）：四个角色分阶段协作，核验今日岗位 →
+拆解最优先那个的要求与缺口 → 出简历与作品动作 → 出模拟面试题，最后由 Evidence Judge
+核对来源。实测约 6-7 分钟、6 次模型调用。
 
 ### 2. 飞书机器人
 
@@ -68,18 +73,21 @@ export ANTHROPIC_API_KEY=...
 uv run job-agent-feishu
 ```
 
-群里 `@Chief of Staff` 一句话，或在单聊里直接发命令。普通消息按关键词自动路由；
-下面这些命令可以显式指定要谁干活：
+群里必须 `@Chief of Staff`——飞书只在机器人被点名时才推送群消息，`@所有人` 是 at_all，
+点不到机器人，那条消息服务端根本收不到。单聊里直接发命令即可。
+
+普通消息由 Chief of Staff 拆解后派单；下面这些命令可以显式指定要谁干活（会跳过拆解）：
 
 | 命令 | 做什么 |
 |---|---|
 | `/help` | 查看帮助，不调用模型 |
 | `/roles` | 查看当前角色，不调用模型 |
-| `/job <任务>` | 岗位侦察 + JD 分析 + 岗位知识，分阶段协作 |
-| `/apply <任务>` | JD／知识先行，再产出简历与作品建议 |
-| `/interview <任务>` | JD／知识先行，再产出面试准备 |
-| `/team <任务>` | 6 个工作角色分两阶段全量协作 |
-| `/knowledge <任务>` | 只让 Knowledge Curator 补领域知识 |
+| `/today` | **今日求职流程，不用带参数**。4 个角色分阶段跑完整套 |
+| `/job <任务>` | 岗位侦察 + 岗位分析，分阶段协作 |
+| `/apply <任务>` | 岗位分析先行，再产出简历与作品材料 |
+| `/interview <任务>` | 岗位分析先行，再产出面试准备 |
+| `/team <任务>` | 4 个工作角色分阶段协作（你给任务；不给任务用 `/today`） |
+| `/knowledge <任务>` | 只让 Job Analyst 拆解岗位要求与所需知识 |
 | `/ask <role_id> <问题>` | 向指定角色单独提问（`/agent` 是别名） |
 | `/mock start <主题> [语音] [N轮]` | 进入一问一答的实时模拟面试 |
 | `/mock skip` / `/mock status` / `/mock end` | 跳过本题／看进度／收尾复盘 |
@@ -118,24 +126,34 @@ curl -X POST http://127.0.0.1:8000/api/runs \
 
 ## 团队里都有谁
 
-一次分阶段协作按 `route → discovery → analysis → action → judge` 五个阶段推进，
-由 LangGraph 状态图编排：
+Chief of Staff 先拆解任务并决定派谁，被选中的角色再按
+`route → discovery → analysis → action → judge` 推进，由 LangGraph 状态图编排：
 
-| 角色 | `role_id` | 阶段 | 负责 |
-|---|---|---|---|
-| Chief of Staff | `controller` | 接单／收口 | 说明选了谁和为什么、读图转写、最后给一句下一步 |
-| Job Scout | `job_scout` | discovery | 发现并核验岗位，给出可访问的官方来源与截止时间 |
-| JD Analyst | `jd_analyst` | analysis | 把 JD 拆成硬要求、加分项、关键词与技能缺口 |
-| Knowledge Curator | `job_knowledge_curator` | analysis | 补齐领域知识、技术栈、工程难点与学习优先级 |
-| Resume Strategist | `resume_strategist` | action | 选简历版本，把项目证据改写成可量化 bullet |
-| Portfolio Coach | `portfolio_coach` | action | 把岗位缺口转成可展示的作品动作与验收指标 |
-| Interview Coach | `interview_coach` | action | 生成问题、追问、评分标准和学习任务 |
-| Evidence Judge | `judge` | judge | 核对来源与冲突，删掉不可验证的说法 |
+| 角色 | `role_id` | 阶段 | 模型 · effort | 工具 | 负责 |
+|---|---|---|---|---|---|
+| Chief of Staff | `controller` | 拆解／接单／收口 | Sonnet 5 · low | — | 把请求拆成最多 3 个子任务并说明派谁、为什么；读图转写；最后给一句下一步 |
+| Job Scout | `job_scout` | discovery | Sonnet 5 · medium | 搜索 + 抓取 | 发现并核验岗位，给出可访问的官方来源与截止时间 |
+| Job Analyst | `job_analyst` | analysis | **Opus 5** · high | 搜索 + 抓取 | 把 JD 拆成硬要求、加分项、关键词与缺口，并把缺口涉及的概念、技术栈、工程难点讲到能面试的深度 |
+| Material Builder | `material_builder` | action | Sonnet 5 · medium | 读岗位表 | 选简历版本改写量化 bullet；把缺口转成可展示的作品动作与验收指标 |
+| Interview Coach | `interview_coach` | action | Sonnet 5 · medium | 仅资料包 | 生成问题、追问、评分标准和学习任务 |
+| Evidence Judge | `judge` | judge | **Opus 5** · high | 仅抓取（核验） | 核对来源与冲突，删掉不可验证的说法 |
+
+工具是按职责给的，不是按等级给的。Judge 只有「抓取」没有「搜索」——它能真的打开上游
+引用的链接去核验，但不能自己去找新岗位，那会违反它「只保留上游支持的事实」的契约。
+Interview Coach 什么联网工具都没有，因为给它搜索只会招来假冒的「公司真题」。
+
+模型和 effort 也按任务性质分：拆解、读图、收口是路由和转写，不需要推理深度，跑
+`low`；工具循环和受约束改写跑 `medium`；只有真正要推理的两个角色（讲清概念、交叉核对
+证据）上 Opus + `high`。
 
 角色是数据不是硬编码的图节点：`workflow_stage` 决定它在流程里的位置，通过网页表单、
 `POST /api/roles` 或 `/role-add` 新增角色即时生效，不改代码不重启。单个角色失败不
 阻塞整体，Judge 会基于已完成的结果出部分报告；超时和连接错误一律进事件流并在页面
 上显示。
+
+Evidence Judge 只在需要时出场：多个角色的产出要交叉核对时一定审，单个角色回答一个
+明确问题时由拆解决定要不要审。拆解本身失败（超时、返回的不是 JSON）会退回关键词
+路由，事件流里会写明是哪一种路由做的决定。
 
 ## 常用配置
 
@@ -145,10 +163,11 @@ curl -X POST http://127.0.0.1:8000/api/runs \
 ANTHROPIC_API_KEY=...
 JOB_AGENT_MODEL=claude-sonnet-5                             # 默认模型
 JOB_AGENT_KNOWLEDGE_MODEL=claude-opus-5                     # 需要更强推理的角色
-JOB_AGENT_ROLE_MODEL_JOB_KNOWLEDGE_CURATOR=claude-opus-5    # 只改某一个角色
+JOB_AGENT_ROLE_MODEL_JOB_ANALYST=claude-opus-5              # 只改某一个角色
 JOB_AGENT_ORCHESTRATOR=asyncio                              # 切到轻量 baseline 编排器
 JOB_AGENT_ALWAYS_ON=1                                       # 常驻巡检
 JOB_AGENT_DAILY_PUSH=1                                      # 每日日报定时推送
+JOB_AGENT_CHIEF_PLANNER=0                                   # 关掉任务拆解，退回关键词路由
 ```
 
 模型解析顺序是 `网页/API 的 RoleSpec.model` > `JOB_AGENT_ROLE_MODEL_<ROLE_ID>` >
@@ -181,7 +200,7 @@ API 服务自己也会起同一个巡检和日报定时器，两边抢同一把�
 长期记忆可以直接审计，检索质量有可重跑的量化基线：
 
 ```bash
-curl http://127.0.0.1:8000/api/agents/jd_analyst/memories
+curl http://127.0.0.1:8000/api/agents/job_analyst/memories
 uv run python benchmarks/eval_memory_retrieval.py
 ```
 

@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 ActivityKind = Literal[
     "run_started",
     "intake_completed",
+    "plan_created",
     "attachment_read",
     "route_completed",
     "phase_started",

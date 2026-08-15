@@ -23,10 +23,8 @@ def test_collaborative_task_graph_exposes_real_dependencies_and_progress(
         query="分析新岗位并生成求职行动",
         roles=[
             role("job_scout", "context"),
-            role("jd_analyst", "context"),
-            role("job_knowledge_curator", "context"),
-            role("resume_strategist", "action"),
-            role("portfolio_coach", "action"),
+            role("job_analyst", "context"),
+            role("material_builder", "action"),
             role("interview_coach", "action"),
         ],
         mode="collaborative",
@@ -36,33 +34,37 @@ def test_collaborative_task_graph_exposes_real_dependencies_and_progress(
     graph = store.create(graph)
     by_id = {task.task_id: task for task in graph.tasks}
 
+    # Three layers: discovery → analysis → action, then the judge over all of it.
     assert by_id["job_scout"].phase == "discovery"
     assert by_id["job_scout"].status == "ready"
-    assert by_id["jd_analyst"].depends_on == ["job_scout"]
-    assert by_id["resume_strategist"].depends_on == [
+    assert by_id["job_analyst"].phase == "analysis"
+    assert by_id["job_analyst"].depends_on == ["job_scout"]
+    assert by_id["material_builder"].depends_on == [
         "job_scout",
-        "jd_analyst",
-        "job_knowledge_curator",
+        "job_analyst",
+    ]
+    assert by_id["interview_coach"].depends_on == [
+        "job_scout",
+        "job_analyst",
     ]
     assert by_id["judge"].depends_on == [
         "job_scout",
-        "jd_analyst",
-        "job_knowledge_curator",
-        "resume_strategist",
-        "portfolio_coach",
+        "job_analyst",
+        "material_builder",
         "interview_coach",
     ]
 
     store.update_task("task-run", "job_scout", status="completed")
     graph = store.get("task-run")
     by_id = {task.task_id: task for task in graph.tasks}
-    assert by_id["jd_analyst"].status == "ready"
-    assert by_id["job_knowledge_curator"].status == "ready"
-    assert by_id["resume_strategist"].status == "blocked"
+    assert by_id["job_analyst"].status == "ready"
+    # The action roles wait for analysis, not just for discovery.
+    assert by_id["material_builder"].status == "blocked"
+    assert by_id["interview_coach"].status == "blocked"
 
-    for task_id in ["jd_analyst", "job_knowledge_curator"]:
-        store.update_task("task-run", task_id, status="completed")
+    store.update_task("task-run", "job_analyst", status="completed")
     graph = store.get("task-run")
     by_id = {task.task_id: task for task in graph.tasks}
-    assert by_id["resume_strategist"].status == "ready"
+    assert by_id["material_builder"].status == "ready"
+    assert by_id["interview_coach"].status == "ready"
     assert graph.progress > 0

@@ -11,6 +11,7 @@ from .models import AgentResult, RunMetrics, RunReport, RunRequest
 from .orchestrator import (
     MultiAgentOrchestrator,
     build_judge_input,
+    judge_needed,
     merge_judged_output,
     workflow_stage,
 )
@@ -316,7 +317,7 @@ class LangGraphOrchestrator:
         successful = [result for result in results if result.status == "ok"]
         final_output = self.base._format_results(successful)
         judge_called = False
-        if request.use_judge and successful:
+        if judge_needed(request, successful):
             try:
                 judge = self.base.role_for_run("judge", request)
             except KeyError:

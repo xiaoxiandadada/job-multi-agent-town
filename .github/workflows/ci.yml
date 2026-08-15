@@ -42,8 +42,12 @@ jobs:
           # Require a non-identifier character before sk- so ordinary names that
           # happen to contain it (task-graph-progress-label) do not trip the gate.
           if git grep -qE '(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}' -- ':!uv.lock'; then
-            echo "Potential API key found in tracked files:"
-            git grep -nE '(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}' -- ':!uv.lock'
+            echo "Potential API key found in these files:"
+            # -l, not -n: printing the matching line would copy the credential
+            # into the build log, which Actions does not mask (masking only
+            # covers registered repo secrets) and keeps for ~90 days. The
+            # filename is enough to find it locally.
+            git grep -lE '(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}' -- ':!uv.lock'
             exit 1
           fi
       - run: docker build -t job-agent-studio:test .

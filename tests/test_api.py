@@ -44,7 +44,7 @@ def test_role_can_be_paused_and_reconfigured_without_restart(
     client = TestClient(create_app())
 
     response = client.patch(
-        "/api/roles/portfolio_coach",
+        "/api/roles/material_builder",
         json={
             "enabled": False,
             "town_place": "作品实验室",
@@ -60,7 +60,7 @@ def test_role_can_be_paused_and_reconfigured_without_restart(
     agent = next(
         item
         for item in town["agents"]
-        if item["role_id"] == "portfolio_coach"
+        if item["role_id"] == "material_builder"
     )
     assert agent["status"] == "disabled"
     assert agent["place"] == "作品实验室"
@@ -74,7 +74,7 @@ def test_role_model_can_be_configured_and_resolved_without_restart(
     client = TestClient(create_app())
 
     response = client.patch(
-        "/api/roles/job_knowledge_curator",
+        "/api/roles/job_analyst",
         json={"model": "Qwen/custom-knowledge-model"},
     )
 
@@ -87,9 +87,53 @@ def test_role_model_can_be_configured_and_resolved_without_restart(
     configured = next(
         item
         for item in models["roles"]
-        if item["role_id"] == "job_knowledge_curator"
+        if item["role_id"] == "job_analyst"
     )
     assert configured["resolved_model"] == "Qwen/custom-knowledge-model"
+
+
+def test_role_effort_can_be_configured_and_cleared_without_restart(
+    tmp_path,
+    monkeypatch,
+):
+    """The web role card sends both fields, so clearing has to be expressible.
+
+    ``exclude_unset`` means an explicit ``null`` clears the field while an absent
+    key leaves it alone — which is what lets the card's "继承" option mean
+    "send no output_config" rather than "keep whatever was there".
+    """
+
+    monkeypatch.setenv("JOB_AGENT_DATA_DIR", str(tmp_path))
+    client = TestClient(create_app())
+
+    raised = client.patch("/api/roles/material_builder", json={"effort": "xhigh"})
+    assert raised.status_code == 200
+    assert raised.json()["role"]["effort"] == "xhigh"
+
+    inherited = client.patch(
+        "/api/roles/material_builder",
+        json={"model": None, "effort": None},
+    )
+    assert inherited.status_code == 200
+    assert inherited.json()["role"]["effort"] is None
+
+    # An absent key is not a clear: the seeded level survives an unrelated patch.
+    client.patch("/api/roles/job_analyst", json={"town_place": "分析所"})
+    role = next(
+        item
+        for item in client.get("/api/roles").json()
+        if item["role_id"] == "job_analyst"
+    )
+    assert role["effort"] == "high"
+
+
+def test_role_effort_rejects_a_level_the_api_does_not_have(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOB_AGENT_DATA_DIR", str(tmp_path))
+    client = TestClient(create_app())
+
+    response = client.patch("/api/roles/job_analyst", json={"effort": "extreme"})
+
+    assert response.status_code == 422
 
 
 def test_task_graph_api_returns_dependencies_and_progress(
@@ -106,8 +150,8 @@ def test_task_graph_api_returns_dependencies_and_progress(
             workflow_stage="context",
         ),
         RoleSpec(
-            role_id="resume_strategist",
-            display_name="Resume Strategist",
+            role_id="material_builder",
+            display_name="Material Builder",
             goal="根据岗位证据选择简历版本并改写 bullet",
             system_prompt="只基于真实项目证据改写简历。",
             workflow_stage="action",
@@ -133,7 +177,7 @@ def test_task_graph_api_returns_dependencies_and_progress(
     resume = next(
         task
         for task in graph["tasks"]
-        if task["role_id"] == "resume_strategist"
+        if task["role_id"] == "material_builder"
     )
     assert resume["depends_on"] == ["job_scout"]
     assert client.get("/api/task-graphs").json()[0]["run_id"] == (
@@ -159,7 +203,7 @@ def test_agent_memory_search_endpoint_uses_persisted_run_memory(
         "/api/runs",
         json={
             "query": "分析 Agent Evaluation golden set",
-            "requested_roles": ["portfolio_coach"],
+            "requested_roles": ["material_builder"],
             "mode": "single",
             "use_judge": False,
         },
@@ -167,14 +211,14 @@ def test_agent_memory_search_endpoint_uses_persisted_run_memory(
 
     assert response.status_code == 200
     memories = client.get(
-        "/api/agents/portfolio_coach/memories"
+        "/api/agents/material_builder/memories"
     ).json()
     assert {memory["kind"] for memory in memories} >= {
         "plan",
         "observation",
     }
     results = client.get(
-        "/api/agents/portfolio_coach/memories/search",
+        "/api/agents/material_builder/memories/search",
         params={"query": "golden set"},
     ).json()
     assert results
@@ -288,7 +332,7 @@ def test_town_api_exposes_routing_edges_and_the_always_on_shift(
             status="completed",
             orchestrator="langgraph",
             phase="route",
-            selected_role_ids=["job_scout", "jd_analyst"],
+            selected_role_ids=["job_scout", "job_analyst"],
         ),
         ActivityEvent(
             timestamp=(now - timedelta(seconds=190)).isoformat(),
@@ -298,7 +342,7 @@ def test_town_api_exposes_routing_edges_and_the_always_on_shift(
             orchestrator="langgraph",
             phase="analysis",
             source_role_ids=["job_scout"],
-            target_role_ids=["jd_analyst"],
+            target_role_ids=["job_analyst"],
             output_excerpt="共享核验过的岗位",
         ),
         ActivityEvent(
@@ -325,7 +369,7 @@ def test_town_api_exposes_routing_edges_and_the_always_on_shift(
         for route in town["routes"]
     }
     assert ("dispatch", "plaza", "job_scout") in edges
-    assert ("handoff", "job_scout", "jd_analyst") in edges
+    assert ("handoff", "job_scout", "job_analyst") in edges
     shift = next(item for item in town["shifts"] if item["role_id"] == "job_scout")
     assert shift["state"] == "standby"
     assert shift["display_name"] == "Job Scout"

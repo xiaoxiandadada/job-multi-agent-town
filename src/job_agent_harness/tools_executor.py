@@ -29,6 +29,7 @@ import ipaddress
 import json
 import os
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -39,6 +40,85 @@ from .role_context import default_prepare_dir
 
 
 JOB_TABLE_RELATIVE = "jobs/autumn_job_tracker.md"
+
+#: The tools this module implements. A ``RoleSpec.tools`` entry may name one of
+#: these directly when a role should get it without the other — see
+#: ``LOCAL_TOOL_GUIDES`` for why that matters.
+LOCAL_TOOL_NAMES = ("list_tracked_jobs", "fetch_url")
+
+#: Per-tool prompt guidance, assembled from only the tools a role actually got.
+#: Describing a tool the role cannot call makes the model try it, fail, and then
+#: explain the failure to the user — which reads as a broken agent.
+LOCAL_TOOL_GUIDES = {
+    "list_tracked_jobs": (
+        "- list_tracked_jobs：读取本地维护的岗位表，拿到真实公司、岗位全名、"
+        "官方链接和备注。先调用它。"
+    ),
+    "fetch_url": (
+        "- fetch_url：抓取岗位表里的官方页面正文。只能抓 list_tracked_jobs 返回的、"
+        "或用户消息里出现的链接；域名不在白名单时会被拒绝，这时写"
+        "“抓取被拒绝：域名未授权”，不要换个链接硬编。"
+    ),
+}
+
+#: ``fetch_url`` without ``list_tracked_jobs``. The verifier's case: pointing it
+#: at a tool it does not have as its only source of links would strand it, so
+#: point at the conversation instead.
+FETCH_ONLY_GUIDE = (
+    "- fetch_url：抓取上文已经出现过的官方页面正文，用来核验别人给出的链接和断言。"
+    "只能抓上游角色或用户已经写出来的链接，不要自己找新链接；"
+    "域名不在白名单时会被拒绝，这时写“抓取被拒绝：域名未授权”。"
+)
+
+#: Only for roles whose job is to *produce* job entries. A role that merely
+#: verifies or reads the table has its own output contract in its system prompt,
+#: and appending this one would contradict it — the judge is supposed to return
+#: an audit verdict, not a list of companies and JD quotes.
+LOCAL_OUTPUT_CONTRACT = """# 输出具体度要求（这是硬要求）
+禁止只输出抽象清单或方法论。必须逐条给出可核对的实体：
+1. 公司 + 岗位全名 + 岗位 ID（页面或岗位表里有就给，没有写“页面未标注”）
+2. 完整官方 JD 链接
+3. 届别、岗位类型、发布/截止时间，写明来源里的原文表述
+4. JD 原文摘录：至少 2 句直接引用，用 > 引用块，不要改写
+5. 与用户方向的匹配点与缺口，各自指向原文里的哪一句"""
+
+
+def local_tool_instructions(
+    names: Sequence[str] = LOCAL_TOOL_NAMES,
+    *,
+    output_contract: bool | None = None,
+) -> str:
+    """Prompt text for exactly the local tools a role was given.
+
+    ``output_contract`` defaults to "only with the full discovery pair": holding
+    both tools means the role's job is to produce job entries, while a narrow
+    grant means it is verifying or reading, and already has its own output
+    contract that this one would fight.
+    """
+
+    wanted = [name for name in LOCAL_TOOL_NAMES if name in set(names)]
+    if not wanted:
+        return ""
+    guides = [
+        FETCH_ONLY_GUIDE
+        if name == "fetch_url" and "list_tracked_jobs" not in wanted
+        else LOCAL_TOOL_GUIDES[name]
+        for name in wanted
+    ]
+    lines = [
+        "# 本地联网工具（本次调用可用）",
+        "你有以下在本机执行的工具，必须真的调用它们取证，不要凭印象作答：",
+        *guides,
+        "抓取失败就照实写“抓取失败：<原因>”，不要用推测补齐。",
+    ]
+    body = "\n".join(lines)
+    if output_contract is None:
+        output_contract = len(wanted) == len(LOCAL_TOOL_NAMES)
+    return f"{body}\n\n{LOCAL_OUTPUT_CONTRACT}" if output_contract else body
+
+
+#: Kept as the all-tools default so existing callers and prompts are unchanged.
+LOCAL_TOOL_INSTRUCTIONS = local_tool_instructions()
 
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"')|]+")
 _SCRIPT_STYLE = re.compile(
@@ -52,20 +132,6 @@ _BLOCK_END = re.compile(
 _TAG = re.compile(r"<[^>]+>")
 _BLANK_LINES = re.compile(r"\n{3,}")
 
-LOCAL_TOOL_INSTRUCTIONS = """# 本地联网工具（本次调用可用）
-你有两个在本机执行的工具，必须真的调用它们取证，不要凭印象作答：
-- list_tracked_jobs：读取本地维护的岗位表，拿到真实公司、岗位全名、官方链接和备注。先调用它。
-- fetch_url：抓取岗位表里的官方页面正文。只能抓 list_tracked_jobs 返回的、或用户消息里出现的链接；
-  域名不在白名单时会被拒绝，这时写“抓取被拒绝：域名未授权”，不要换个链接硬编。
-抓取失败就照实写“抓取失败：<原因>”，不要用推测补齐。
-
-# 输出具体度要求（这是硬要求）
-禁止只输出抽象清单或方法论。必须逐条给出可核对的实体：
-1. 公司 + 岗位全名 + 岗位 ID（页面或岗位表里有就给，没有写“页面未标注”）
-2. 完整官方 JD 链接
-3. 届别、岗位类型、发布/截止时间，写明来源里的原文表述
-4. JD 原文摘录：至少 2 句直接引用，用 > 引用块，不要改写
-5. 与用户方向的匹配点与缺口，各自指向原文里的哪一句"""
 
 
 def html_to_text(payload: str, max_chars: int = 12_000) -> str:
@@ -198,9 +264,20 @@ class LocalJobTools:
 
     # ---------------------------------------------------------------- tools
 
-    def definitions(self) -> list[dict[str, Any]]:
-        return [
-            {
+    def definitions(
+        self,
+        names: Sequence[str] = LOCAL_TOOL_NAMES,
+    ) -> list[dict[str, Any]]:
+        """Schemas for the requested tools, in ``LOCAL_TOOL_NAMES`` order.
+
+        Filtering here rather than at the call site keeps one source of truth for
+        what each tool is: a role that only gets ``fetch_url`` must not see a
+        ``list_tracked_jobs`` schema it is not allowed to call.
+        """
+
+        wanted = set(names)
+        all_definitions = {
+            "list_tracked_jobs": {
                 "name": "list_tracked_jobs",
                 "description": (
                     "读取本地维护的 2027 届校招岗位表，返回真实公司、岗位全名、"
@@ -208,7 +285,7 @@ class LocalJobTools:
                 ),
                 "input_schema": {"type": "object", "properties": {}},
             },
-            {
+            "fetch_url": {
                 "name": "fetch_url",
                 "description": (
                     "抓取一个官方招聘页面并返回正文纯文本，用于直接引用 JD 原文。"
@@ -225,11 +302,16 @@ class LocalJobTools:
                     "required": ["url"],
                 },
             },
+        }
+        return [
+            all_definitions[name]
+            for name in LOCAL_TOOL_NAMES
+            if name in wanted
         ]
 
     @property
     def tool_names(self) -> set[str]:
-        return {item["name"] for item in self.definitions()}
+        return set(LOCAL_TOOL_NAMES)
 
     async def run(self, name: str, payload: dict[str, Any]) -> str:
         if name == "list_tracked_jobs":

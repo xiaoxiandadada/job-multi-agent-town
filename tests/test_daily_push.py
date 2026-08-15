@@ -68,8 +68,8 @@ async def test_role_daily_push_becomes_town_activity_and_memory(
     binding = FeishuBotBinding(
         app_id="cli_test",
         app_secret="secret",
-        display_name="Portfolio Coach",
-        role_id="portfolio_coach",
+        display_name="Material Builder",
+        role_id="material_builder",
     )
     monkeypatch.setenv("JOB_AGENT_FEISHU_CHAT_ID", "oc_test")
     monkeypatch.setattr(
@@ -81,7 +81,7 @@ async def test_role_daily_push_becomes_town_activity_and_memory(
         push_module,
         "load_role_daily_messages",
         lambda *args, **kwargs: {
-            "portfolio_coach": ["作品推进：完成 RPG 小镇记忆流"]
+            "material_builder": ["作品推进：完成 RPG 小镇记忆流"]
         },
     )
     monkeypatch.setattr(
@@ -90,8 +90,8 @@ async def test_role_daily_push_becomes_town_activity_and_memory(
         lambda registry: [binding],
     )
     role = RoleSpec(
-        role_id="portfolio_coach",
-        display_name="Portfolio Coach",
+        role_id="material_builder",
+        display_name="Material Builder",
         goal="把岗位缺口转成可展示的作品动作",
         system_prompt="输出可验证的最小作品动作和验收指标。",
     )
@@ -124,11 +124,11 @@ async def test_role_daily_push_becomes_town_activity_and_memory(
         "daily_push_completed",
         "run_completed",
     ]
-    assert events[7].role_id == "portfolio_coach"
+    assert events[7].role_id == "material_builder"
     graph = task_graphs.get(events[0].run_id)
     assert graph.status == "completed"
-    assert graph.tasks[0].role_id == "portfolio_coach"
-    role_memories = memories.list(role_id="portfolio_coach")
+    assert graph.tasks[0].role_id == "material_builder"
+    role_memories = memories.list(role_id="material_builder")
     assert role_memories[-1].kind == "observation"
     assert "RPG 小镇记忆流" in role_memories[-1].text
 
@@ -159,9 +159,8 @@ async def test_a_scheduled_push_writes_the_brief_when_nobody_did(
             )
             for role_id in [
                 "job_scout",
-                "job_knowledge_curator",
-                "resume_strategist",
-                "portfolio_coach",
+                "job_analyst",
+                "material_builder",
                 "interview_coach",
                 "judge",
             ]
