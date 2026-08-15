@@ -16,7 +16,13 @@ from lark_oapi.channel import FeishuChannel
 
 from .attachments import download_images, strip_image_markdown
 from .chief_of_staff import ChiefOfStaff
-from .commands import HELP_TEXT, RunCommand, parse_run_command
+from .commands import (
+    HELP_TEXT,
+    PALETTE_TRIGGER,
+    RunCommand,
+    command_palette_markdown,
+    parse_run_command,
+)
 from .daily_brief import (
     load_daily_messages,
     load_role_daily_messages,
@@ -34,6 +40,7 @@ from .interview_session import (
     InterviewCoach,
     InterviewSessionStore,
 )
+from .match_alert import alert_from_results
 from .models import ImageAttachment, RoleSpec, RunReport, RunRequest
 from .runtime import (
     build_orchestrator,
@@ -646,6 +653,18 @@ def register_message_handler(
                     },
                 )
             return
+        # A bare "/" is the gesture people already have muscle memory for, and
+        # it has to be caught here: ``parse_run_command`` rejects anything
+        # starting with "/" that it does not recognise, so left to fall through
+        # this would answer a request for the menu with "未知命令".
+        if text == PALETTE_TRIGGER:
+            await send_checked(
+                channel,
+                message.chat_id,
+                {"markdown": command_palette_markdown()},
+            )
+            return
+
         if text == "/help":
             await send_checked(
                 channel,
@@ -882,6 +901,26 @@ def register_message_handler(
                     )
                 },
             )
+
+        # Deliberately outside the block above: a report that failed to send
+        # because it was too long is exactly when a short, actionable push
+        # matters most, so the nudge must not share the report's fate. A failure
+        # here is logged and swallowed — the score already reached the user
+        # through the report, and an exception would only lose the run's
+        # remaining bookkeeping.
+        nudge = alert_from_results(report.results)
+        if nudge:
+            try:
+                await send_checked(
+                    channel,
+                    message.chat_id,
+                    {"markdown": nudge},
+                )
+            except Exception:
+                logger.exception(
+                    "apply nudge send failed for run=%s",
+                    report.run_id[:8],
+                )
 
     channel.on("message", on_message)
 

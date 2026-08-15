@@ -159,12 +159,14 @@ HELP_TEXT = """# Chief of Staff 命令
 - `/apply <任务>`：岗位分析先行，再产出简历与作品材料
 - `/interview <任务>`：岗位分析先行，再生成面试准备
 - `/match <岗位或 JD>`：只算匹配度——五维评分 + 证据 + 今天能提分的动作
-- `/team <任务>`：5 个工作角色分阶段协作（你给任务；不给任务用 `/today`）
+- `/team <任务>`：4 个工作角色分阶段协作（你给任务；不给任务用 `/today`）
 - `/mock start <主题> [语音] [N轮]`：Interview Coach 一问一答的实时模拟面试
 - `/mock skip` / `/mock status` / `/mock end`：跳过本题 / 查看进度 / 结束复盘
 - `/ask <role_id> <问题>`：向指定角色提问（跳过任务拆解）
 - `/agent <role_id> <任务>`：`/ask` 的兼容别名
 - `/role-add <JSON>`：新增并立即启用角色
+
+只发一个 `/` 我就把上面这张表展开发给你，不用记。
 
 其他普通消息由我先拆解成最多 3 个子任务再派单，所以一句话通常只唤起一到两个角色。
 我会先回一条「意图 / 分派 / 拆解依据」的接单说明，再交给角色执行，最后补一段下一步。"""
@@ -288,3 +290,42 @@ def command_catalog() -> list[CommandInfo]:
     for name, (hint, summary) in _EXTRA_COMMAND_SUMMARIES.items():
         catalog.append(CommandInfo(name=name, hint=hint, summary=summary, roles=[]))
     return catalog
+
+
+#: What a bare ``/`` is answered with. Feishu's own slash panel is configured in
+#: the developer console and cannot be created from here, so the next best thing
+#: is to treat ``/`` as a command in its own right and expand the catalog inline.
+PALETTE_TRIGGER = "/"
+
+
+def command_palette_markdown() -> str:
+    """The catalog as a panel, for a channel that has no palette widget.
+
+    Built from ``command_catalog`` rather than written out, for the same reason
+    the web input reads that function over HTTP: a second hand-maintained list
+    starts agreeing with ``PRESET_COMMANDS`` and stops the first time someone
+    adds a command. The role count is shown because it is the only hint the user
+    gets about what a command will cost in time — ``/today`` waking five roles is
+    a different decision from ``/knowledge`` waking one.
+    """
+
+    catalog = command_catalog()
+    lines = ["# 可用命令", "", "**求职流程**（会调用模型，角色数越多越慢）"]
+    for info in catalog:
+        if not info.roles:
+            continue
+        usage = f"{info.name} {info.hint}".strip()
+        lines.append(f"- `{usage}` · {len(info.roles)} 个角色 —— {info.summary}")
+    lines.append("")
+    lines.append("**工具命令**")
+    for info in catalog:
+        if info.roles:
+            continue
+        usage = f"{info.name} {info.hint}".strip()
+        lines.append(f"- `{usage}` —— {info.summary}")
+    lines.append("")
+    lines.append(
+        "不带命令直接说人话也行，我会自己判断该派谁。"
+        "只想问一个知识点就用 `/ask job_analyst <问题>`，最快。"
+    )
+    return "\n".join(lines)

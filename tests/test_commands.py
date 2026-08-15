@@ -3,6 +3,10 @@ import pytest
 from job_agent_harness.commands import (
     DAILY_FLOW_TASK,
     FLOW_TIMEOUT_SECONDS,
+    PALETTE_TRIGGER,
+    PRESET_COMMANDS,
+    command_catalog,
+    command_palette_markdown,
     looks_like_daily_flow,
     parse_run_command,
 )
@@ -154,3 +158,48 @@ def test_ask_command_is_an_alias_for_a_specific_role():
 def test_command_without_query_is_rejected(text):
     with pytest.raises(ValueError, match="用法"):
         parse_run_command(text)
+
+
+def test_bare_slash_is_the_palette_trigger():
+    """Kept as a constant so the channel and the parser cannot disagree."""
+
+    assert PALETTE_TRIGGER == "/"
+
+
+def test_every_flow_the_palette_offers_is_one_the_parser_accepts():
+    """The reason the panel is generated instead of written out.
+
+    A hand-maintained menu drifts from ``PRESET_COMMANDS`` the first time someone
+    adds or renames a command, and then it confidently offers something that
+    fails to parse. This walks the catalog and puts each entry through the real
+    parser, asserting the roles it advertises are the roles that actually run.
+    """
+
+    for info in command_catalog():
+        if not info.roles:
+            continue
+        text = info.name if not info.hint else f"{info.name} 测试任务"
+        command = parse_run_command(text)
+        assert command.requested_roles == info.roles, info.name
+
+
+def test_the_palette_lists_every_preset_flow():
+    body = command_palette_markdown()
+    for name in PRESET_COMMANDS:
+        assert name in body, name
+
+
+def test_the_palette_states_the_role_count_it_will_wake():
+    """The only cost signal the user gets before committing to a run."""
+
+    body = command_palette_markdown()
+    assert "`/today` · 5 个角色" in body
+    assert "`/knowledge <任务>` · 1 个角色" in body
+
+
+def test_the_palette_separates_flows_from_tools():
+    body = command_palette_markdown()
+    assert body.index("**求职流程**") < body.index("`/today`")
+    # /help calls no model, so it must not be sitting under the heading that
+    # warns about model cost.
+    assert body.index("**工具命令**") < body.index("`/help`")

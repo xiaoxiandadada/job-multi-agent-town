@@ -9,7 +9,7 @@ from .cognition import MemoryStore
 from .model_client import ModelClient
 from .models import AgentResult, RoleSpec, RunMetrics, RunReport, RunRequest
 from .registry import RoleRegistry
-from .structured import render_structured_output
+from .structured import structured_result
 from .tasks import TaskGraphStore, build_run_task_graph
 
 
@@ -377,13 +377,16 @@ class MultiAgentOrchestrator:
                 self._complete_role(role, role_query, images),
                 timeout=role.timeout_seconds,
             )
+            # A data role returns JSON; everyone downstream — the Judge, the chat
+            # window, Feishu — reads Markdown. Render once here so no consumer has
+            # to know which roles are structured. The parsed object rides along
+            # because the apply-nudge has to compare a score, not read a table.
+            rendered, match_report = structured_result(role.role_id, reply.content)
             result = AgentResult(
                 role_id=role.role_id,
                 display_name=role.display_name,
-                # A data role returns JSON; everyone downstream — the Judge, the
-                # chat window, Feishu — reads Markdown. Render once here so no
-                # consumer has to know which roles are structured.
-                output=render_structured_output(role.role_id, reply.content),
+                output=rendered,
+                match_report=match_report,
                 latency_ms=(time.perf_counter() - started) * 1000,
                 input_tokens=reply.input_tokens,
                 output_tokens=reply.output_tokens,

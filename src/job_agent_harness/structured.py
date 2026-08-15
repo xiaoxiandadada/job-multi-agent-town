@@ -190,11 +190,17 @@ def render_match_report(report: MatchReport) -> str:
     return "\n".join(lines)
 
 
+#: The one role whose parsed object outlives its rendering — see
+#: ``structured_result``. Named rather than inlined because three call sites
+#: would otherwise each spell the id themselves.
+MATCH_SCORER_ROLE_ID = "match_scorer"
+
+
 #: Roles whose reply is JSON and has to be rendered before a human sees it.
 #: Parallel to ``STRUCTURED_OUTPUT_SCHEMAS`` in ``anthropic_client``: one entry
 #: says "constrain the output", this one says "render it back".
 OUTPUT_RENDERERS = {
-    "match_scorer": lambda text: (
+    MATCH_SCORER_ROLE_ID: lambda text: (
         render_match_report(report)
         if (report := parse_match_report(text)) is not None
         else None
@@ -215,3 +221,27 @@ def render_structured_output(role_id: str, text: str) -> str:
         return text
     rendered = renderer(text)
     return rendered if rendered else text
+
+
+def structured_result(role_id: str, text: str) -> tuple[str, MatchReport | None]:
+    """Render the reply *and* hand back the object it came from.
+
+    ``render_structured_output`` discards the parsed report, which is right for
+    display and useless to anything that has to **decide** on the number: by the
+    time the alert code sees Markdown, the score is a glyph in a table cell and
+    recovering it means a regex over prose. Parsing once here and returning both
+    keeps the threshold check reading a validated ``int``.
+
+    Only the scorer has a second consumer, so only the scorer gets the tuple
+    treatment; every other role passes through the renderer it always used.
+    """
+
+    if role_id != MATCH_SCORER_ROLE_ID:
+        return render_structured_output(role_id, text), None
+    report = parse_match_report(text)
+    if report is None:
+        # Same trade as ``render_structured_output``: the raw reply beats a blank
+        # panel. No report means no alert, which is the safe direction — a missed
+        # nudge costs less than one fired off a score nobody could validate.
+        return text, None
+    return render_match_report(report), report

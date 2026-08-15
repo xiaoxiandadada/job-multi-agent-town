@@ -220,6 +220,12 @@ class AgentResult(BaseModel):
     output_tokens: int = 0
     model: str = "unknown"
     error: str | None = None
+    #: Set only for ``match_scorer``, and only when its JSON parsed. ``output``
+    #: above is already the rendered Markdown, so the score survives there as a
+    #: table cell — unusable to anything that has to compare it against a
+    #: threshold. Keeping the validated object next to the prose is what lets the
+    #: apply-nudge read an ``int`` instead of regexing a report.
+    match_report: MatchReport | None = None
 
 
 class RunMetrics(BaseModel):
@@ -393,3 +399,12 @@ MATCH_REPORT_SCHEMA: dict[str, object] = {
     ],
     "additionalProperties": False,
 }
+
+
+# ``AgentResult.match_report`` forward-references ``MatchReport``, which is
+# defined further down this module because the scoring types belong next to the
+# schema they mirror. Under ``from __future__ import annotations`` the annotation
+# is a string, so Pydantic leaves the model incomplete until the name resolves —
+# rebuilding here, once every class exists, is cheaper than reordering the file
+# and keeps the "why" in one place instead of at both definitions.
+AgentResult.model_rebuild()
