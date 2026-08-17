@@ -27,8 +27,10 @@ away from recommending a job the user is ineligible for.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterable
+from pathlib import Path
 
 from .models import AgentResult, MatchReport
 
@@ -148,3 +150,70 @@ def alert_from_results(results: Iterable[AgentResult]) -> str | None:
         if report is not None and should_alert(report):
             return render_alert(report)
     return None
+
+
+def report_from_results(results: Iterable[AgentResult]) -> MatchReport | None:
+    """The scored report in a run, if any role produced one."""
+
+    for result in results:
+        if result.match_report is not None:
+            return result.match_report
+    return None
+
+
+def job_key(report: MatchReport) -> str:
+    """Identity of the job a report is about, for de-duplication.
+
+    Company plus title rather than the URL: the same posting reachable through
+    two URLs is still one job, and a scout that re-finds it through a different
+    link should not produce a second nudge.
+    """
+
+    return f"{report.company.strip()}|{report.job_title.strip()}"
+
+
+class AlertLedger:
+    """Remembers which jobs were already pushed, so a patrol cannot nag.
+
+    The patrol runs every fifteen minutes against a job table that changes far
+    more slowly, so without this the same 82% match would be pushed four times
+    an hour — which trains the user to ignore the one notification this feature
+    exists to send.
+
+    Failures are swallowed on both read and write. A ledger that cannot be read
+    degrades to "nothing seen yet", which risks a duplicate nudge; a ledger that
+    cannot be written risks the same. Both are better than an unreadable state
+    file taking down a patrol.
+    """
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+
+    def seen(self) -> set[str]:
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return set()
+        entries = payload.get("alerted") if isinstance(payload, dict) else None
+        if not isinstance(entries, list):
+            return set()
+        return {str(item) for item in entries}
+
+    def already_alerted(self, report: MatchReport) -> bool:
+        return job_key(report) in self.seen()
+
+    def remember(self, report: MatchReport) -> None:
+        keys = self.seen()
+        keys.add(job_key(report))
+        # Keep the file bounded. A campus-recruiting season is a few hundred
+        # postings, so 500 is generous, and dropping the oldest keys only risks
+        # re-nudging about a job that stopped being relevant months ago.
+        ordered = sorted(keys)[-500:]
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(
+                json.dumps({"alerted": ordered}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            return

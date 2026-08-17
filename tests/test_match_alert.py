@@ -18,10 +18,12 @@ import pytest
 
 from job_agent_harness.match_alert import (
     DEFAULT_THRESHOLD,
+    AlertLedger,
     alert_for,
     alert_from_results,
     alert_threshold,
     alerts_enabled,
+    job_key,
     should_alert,
 )
 from job_agent_harness.models import (
@@ -269,3 +271,61 @@ def test_structured_result_leaves_other_roles_alone():
     rendered, report = structured_result("job_analyst", "## 一、岗位目标")
     assert rendered == "## 一、岗位目标"
     assert report is None
+
+
+# ------------------------------------------------------------------- the ledger
+#
+# The patrol runs every fifteen minutes against a job table that changes far more
+# slowly, so without a memory of what was already sent the same match becomes
+# four notifications an hour.
+
+
+def test_the_ledger_remembers_a_pushed_job(tmp_path):
+    ledger = AlertLedger(tmp_path / "match_alerts.json")
+    report = make_report()
+
+    assert ledger.already_alerted(report) is False
+    ledger.remember(report)
+    assert ledger.already_alerted(report) is True
+
+
+def test_the_ledger_keys_on_company_and_title_not_url(tmp_path):
+    """The same posting reached through a second link is still one job."""
+
+    ledger = AlertLedger(tmp_path / "match_alerts.json")
+    ledger.remember(make_report())
+
+    same_job_other_link = make_report(job_url="https://short.link/abc")
+    assert ledger.already_alerted(same_job_other_link) is True
+
+
+def test_a_different_job_is_still_pushed(tmp_path):
+    ledger = AlertLedger(tmp_path / "match_alerts.json")
+    ledger.remember(make_report())
+
+    assert ledger.already_alerted(make_report(company="腾讯")) is False
+
+
+def test_a_fresh_ledger_reads_as_empty(tmp_path):
+    assert AlertLedger(tmp_path / "never-written.json").seen() == set()
+
+
+def test_a_corrupt_ledger_degrades_instead_of_raising(tmp_path):
+    """A damaged state file must not take down a patrol.
+
+    Reading it as empty risks one duplicate nudge, which is a much cheaper
+    failure than an exception ending the shift.
+    """
+
+    path = tmp_path / "match_alerts.json"
+    path.write_text("{ this is not json", encoding="utf-8")
+
+    ledger = AlertLedger(path)
+    assert ledger.seen() == set()
+    # And it must recover: a later write replaces the garbage.
+    ledger.remember(make_report())
+    assert ledger.already_alerted(make_report()) is True
+
+
+def test_job_key_ignores_surrounding_whitespace():
+    assert job_key(make_report(company="  字节跳动 ")) == job_key(make_report())
