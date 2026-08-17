@@ -265,6 +265,56 @@ uv run job-agent-write-daily --date 2026-08-05
 uv run job-agent-push-daily --generate
 ```
 
+### 角色资料包放在哪
+
+所有角色的 `local_docs` 都从**仓库外**的一个目录读取。`role_context.default_prepare_dir`
+解析的是 `role_context.py` 往上四级再加 `prepare`，也就是把仓库整个放进
+`.../interview/projects/ai-job-agent` 时，资料包在 `.../interview/prepare`——
+不是仓库根下的 `prepare/`。这个位置看着是刻意的：简历和岗位表是个人材料，不该进
+公开仓库。用 `JOB_AGENT_PREPARE_DIR` 可以显式指定。
+
+目录不存在或为空时不会报错，只是每个角色的资料上下文都是 0 字符，表现为：Job Scout
+说岗位表里什么都没有、Match Scorer 打不出分（于是投递提醒永远不触发）、Material
+Builder 无从改简历。想确认当前读到了什么：
+
+```bash
+uv run python -c "
+from job_agent_harness.role_context import build_role_context, default_prepare_dir
+from job_agent_harness.runtime import build_registry
+print(default_prepare_dir())
+reg = build_registry()
+for rid in ('job_scout', 'match_scorer', 'job_analyst'):
+    print(rid, len(build_role_context(reg.get(rid)) or ''))
+"
+```
+
+需要的 10 个文件见 `role_context.ROLE_CONTEXT_FILES`，按角色分组。
+
+### 巡检发现岗位后自动接着跑
+
+Job Scout 的巡检原本只写事件流：搜完就停，凌晨发现的强匹配要等你下次打开飞书才看见。
+现在一次成功巡检会把证据交给下游继续跑，并在分数达标时推提醒。
+
+链条停在打分，不继续改简历：那之后是「要不要投」的人工决策。想要材料和面试准备，
+用 `/apply`、`/interview` 显式触发。
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `JOB_AGENT_PATROL_FOLLOWUP` | `1` | 关掉就退回「只巡检、只记事件流」 |
+| `JOB_AGENT_PATROL_FOLLOWUP_ROLES` | `job_analyst,match_scorer` | 按顺序 collaborative 执行 |
+
+两个刹车。一是**没带回官方链接就不触发**：Scout 的契约是「没有官方链接的岗位不要
+输出」，所以链接是最省事又可靠的「真有岗位」信号；少了这道判断，每次「找不到」都要
+白花两个角色去分析这三个字。日志里会写明「巡检没有带回官方链接，未触发下游分析」。
+
+二是**同一个岗位只提醒一次**：巡检 15 分钟一轮，而岗位表变化慢得多，否则同一个 82%
+会一小时推四遍，最后训练出的结果是你忽略这类通知。已推记录在
+`data/runtime/match_alerts.json`，按「公司 + 岗位名」去重而不是按 URL——同一个岗位
+换条链接找到还是同一个岗位。
+
+下游失败只记日志、不影响巡检本身：巡检已经成功且产出已入库，让一个纯增益的步骤把
+巡检标记成失败，会触发指数退避、直接把常驻巡检停掉。
+
 ### 匹配度达标就提醒投递
 
 Match Scorer 本来只把报告放回你问它的那个会话里，所以常驻巡检时段跑出来的高分要等
