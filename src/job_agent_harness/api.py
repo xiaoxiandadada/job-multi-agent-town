@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from .activity import ActivityEvent
 from .always_on import always_on_enabled, build_watcher
 from .chief_of_staff import ChiefOfStaff
+from .commands import command_catalog
 from .cognition import AgentMemory, RetrievedMemory
 from .daily_schedule import DailyPushScheduler
 from .models import RolePatch, RoleSpec, RunReport, RunRequest
@@ -206,6 +207,16 @@ def create_app() -> FastAPI:
                 else None
             ),
         )
+
+    @app.get("/api/commands")
+    async def commands():
+        """Feeds the web input's slash palette.
+
+        Served rather than duplicated in JavaScript so the palette can never
+        offer a command the parser does not implement.
+        """
+
+        return [item.__dict__ for item in command_catalog()]
 
     @app.get("/api/roles", response_model=list[RoleSpec])
     async def list_roles():

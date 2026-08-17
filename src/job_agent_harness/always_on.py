@@ -24,6 +24,7 @@ import fcntl
 import logging
 import os
 import random
+import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
@@ -31,10 +32,24 @@ from pathlib import Path
 from typing import Any
 
 from .activity import ActivityStore
+from .match_alert import AlertLedger, render_alert, report_from_results, should_alert
 from .models import RunRequest
 
 
 LOGGER = logging.getLogger("job_agent_harness.always_on")
+
+#: A patrol that found something says so with a link — the scout's contract is
+#: "没有官方链接的岗位不要输出", so a link is the cheapest reliable signal that
+#: there is a real posting to hand downstream. Prose alone ("暂无新岗位") must not
+#: trigger the follow-up chain, or every quiet patrol would spend two more roles
+#: analysing the sentence "找不到".
+_LINK_PATTERN = re.compile(r"https?://[^\s)>\]]+")
+
+#: Roles the follow-up chain runs, in order, on the scout's findings. Analysis
+#: then scoring stops exactly where a human decision belongs: the run answers
+#: "is this worth applying to" and leaves "now write my resume" to an explicit
+#: /apply. Overridable because that judgement is the user's, not the code's.
+DEFAULT_FOLLOWUP_ROLES = "job_analyst,match_scorer"
 
 #: Rotated so consecutive patrols do different work instead of re-asking the
 #: same question and re-deriving the same answer.
@@ -349,6 +364,170 @@ class AlwaysOnWatcher:
                 "model_calls": report.metrics.model_calls,
                 "output_tokens": report.metrics.output_tokens,
             },
+        )
+        await self.follow_up(run_id, role_id, report.final_output)
+
+    def followup_enabled(self) -> bool:
+        return _is_truthy(os.getenv("JOB_AGENT_PATROL_FOLLOWUP"), True)
+
+    def data_dir(self) -> Path:
+        """Where this deployment's state lives.
+
+        Derived from the lock path rather than read from the environment again,
+        so a test pointing the lock at ``tmp_path`` gets its alert ledger there
+        too instead of writing into the real runtime directory.
+        """
+
+        if self.lock_path is not None:
+            return self.lock_path.parent
+        from .runtime import runtime_data_dir
+
+        return runtime_data_dir()
+
+    def followup_roles(self) -> list[str]:
+        return _split_env(
+            "JOB_AGENT_PATROL_FOLLOWUP_ROLES",
+            DEFAULT_FOLLOWUP_ROLES,
+        )
+
+    def found_jobs(self, output: str) -> bool:
+        """Whether a patrol produced postings worth handing downstream."""
+
+        return bool(_LINK_PATTERN.search(output or ""))
+
+    async def follow_up(self, run_id: str, role_id: str, output: str) -> None:
+        """Carry a patrol's findings into analysis and scoring.
+
+        A patrol on its own only ever wrote to the event log, so a strong match
+        discovered at 3am was still a strong match nobody was told about. This
+        continues the chain to the point where a human decision starts, and the
+        nudge fires from the score rather than from the scout — a link alone is
+        not evidence that the job is worth applying to.
+
+        Every failure here is logged and swallowed. The patrol itself already
+        succeeded and its output is already recorded; letting a follow-up error
+        mark the patrol failed would trip the backoff and stop patrolling over a
+        problem in a step that is strictly additive.
+        """
+
+        if not self.followup_enabled() or role_id != "job_scout":
+            return
+        if not self.found_jobs(output):
+            # Nothing with a link: the patrol legitimately found nothing new, or
+            # it was a status re-check. Logged rather than recorded as an event —
+            # the patrol already emitted its own ``patrol_completed`` carrying
+            # this output, and a second one would make every quiet patrol look
+            # like two completions to anything reading the event stream.
+            LOGGER.info("巡检没有带回官方链接，未触发下游分析")
+            return
+
+        roles = self.followup_roles()
+        if not roles:
+            return
+        followup_run = f"followup-{uuid.uuid4().hex[:8]}"
+        try:
+            report = await self.orchestrator.run(
+                RunRequest(
+                    query=(
+                        "下面是 Job Scout 本次巡检带回的岗位证据。"
+                        "请基于它继续：拆解要求，并对其中最值得投的一个岗位打匹配度分。"
+                        "不要引入证据里没有出现过的岗位。\n\n"
+                        f"{output}"
+                    ),
+                    requested_roles=roles,
+                    # collaborative so the scorer receives the analyst's handoff
+                    # instead of re-reading the raw patrol text.
+                    mode="collaborative",
+                    use_judge=False,
+                    timeout_seconds=self.timeout_seconds,
+                    origin="patrol",
+                )
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("巡检下游分析失败：%s", exc)
+            return
+
+        scored = report_from_results(report.results)
+        self.activity_store.record(
+            run_id=followup_run,
+            kind="handoff_created",
+            status="completed",
+            orchestrator="always_on",
+            phase="patrol",
+            role_id=role_id,
+            target_role_ids=roles,
+            latency_ms=report.metrics.wall_latency_ms,
+            output=(
+                f"巡检发现的岗位已交给 {'、'.join(roles)}"
+                + (
+                    f"；匹配度 {scored.overall}/100 · {scored.verdict}"
+                    if scored is not None
+                    else "；本轮没有产出可用评分"
+                )
+            ),
+            metrics={"source_run_id": report.run_id},
+        )
+        if scored is None or not should_alert(scored):
+            return
+        await self.push_alert(followup_run, scored)
+
+    async def push_alert(self, run_id: str, report: Any) -> None:
+        """Send the apply-nudge for an unattended run, once per job.
+
+        The interactive path pushes from ``feishu_channel``, which is not in play
+        here — nobody sent a message. Imports are local so a deployment without
+        Feishu credentials still patrols instead of failing at import time.
+        """
+
+        ledger = AlertLedger(self.data_dir() / "match_alerts.json")
+        if ledger.already_alerted(report):
+            return
+        try:
+            from lark_oapi.channel import FeishuChannel
+
+            from .feishu_group import load_chat_id
+            from .runtime import build_registry
+
+            chat_id = os.getenv("JOB_AGENT_FEISHU_CHAT_ID") or load_chat_id(
+                self.data_dir()
+            )
+            if not chat_id:
+                LOGGER.info("匹配度达标但没有可推送的飞书会话，跳过提醒")
+                return
+            from .feishu_channel import load_bot_bindings
+
+            bindings = load_bot_bindings(build_registry())
+            controller = next(
+                (item for item in bindings if item.role_id is None),
+                None,
+            )
+            if controller is None:
+                return
+            channel = FeishuChannel(
+                app_id=controller.app_id,
+                app_secret=controller.app_secret,
+            )
+            result = await channel.send(
+                chat_id,
+                {"markdown": render_alert(report)},
+            )
+            if not getattr(result, "success", False):
+                LOGGER.warning("投递提醒发送失败：%s", getattr(result, "error", ""))
+                return
+        except Exception as exc:
+            LOGGER.warning("投递提醒发送失败：%s", exc)
+            return
+        ledger.remember(report)
+        self.activity_store.record(
+            run_id=run_id,
+            kind="handoff_created",
+            status="completed",
+            orchestrator="always_on",
+            phase="delivery",
+            role_id="match_scorer",
+            output=f"已推送投递提醒：{report.company} · {report.job_title}",
         )
 
     def record_failure(

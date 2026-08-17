@@ -40,8 +40,8 @@ def parts(tmp_path):
     registry = RoleRegistry(tmp_path / "roles.json")
     registry.replace_all(
         [
-            make_role("jd_analyst", "JD", "JD Analyst"),
-            make_role("resume_strategist", "简历", "Resume Strategist"),
+            make_role("job_analyst", "JD", "Job Analyst"),
+            make_role("material_builder", "简历", "Material Builder"),
             make_role("judge", "不会自动触发", "Evidence Judge"),
         ]
     )
@@ -67,8 +67,8 @@ def only(activity: ActivityStore, kind: str):
 
 def test_dispatch_note_explains_the_real_routing_decision():
     roles = [
-        make_role("jd_analyst", "JD", "JD Analyst"),
-        make_role("resume_strategist", "简历", "Resume Strategist"),
+        make_role("job_analyst", "JD", "Job Analyst"),
+        make_role("material_builder", "简历", "Material Builder"),
     ]
 
     note = dispatch_note(
@@ -82,8 +82,8 @@ def test_dispatch_note_explains_the_real_routing_decision():
         f"📋 {CHIEF_DISPLAY_NAME} 已接单",
         "- 意图：分析这个 JD 并改我的简历",
         "- 附件：2 张图片",
-        "- 分派：JD Analyst、Resume Strategist（分阶段协作）",
-        "- 依据：JD Analyst←JD、Resume Strategist←简历",
+        "- 分派：Job Analyst、Material Builder（分阶段协作）",
+        "- 依据：Job Analyst←JD、Material Builder←简历",
         "- 收尾：Evidence Judge 审证据 → Chief of Staff 给下一步",
     ]
 
@@ -91,7 +91,7 @@ def test_dispatch_note_explains_the_real_routing_decision():
 def test_dispatch_note_says_so_when_nothing_matched():
     note = dispatch_note(
         "随便聊聊",
-        [make_role("jd_analyst", "JD", "JD Analyst")],
+        [make_role("job_analyst", "JD", "Job Analyst")],
         mode="parallel",
         use_judge=False,
         with_closing=False,
@@ -105,7 +105,7 @@ def test_dispatch_note_says_so_when_nothing_matched():
 def test_dispatch_note_does_not_invent_keywords_for_an_explicit_request():
     note = dispatch_note(
         "帮我准备面试",
-        [make_role("jd_analyst", "JD", "JD Analyst")],
+        [make_role("job_analyst", "JD", "Job Analyst")],
         mode="single",
         requested_explicitly=True,
     )
@@ -114,7 +114,7 @@ def test_dispatch_note_does_not_invent_keywords_for_an_explicit_request():
 
 
 def test_matched_keywords_mirrors_the_router():
-    role = make_role("jd_analyst", "JD")
+    role = make_role("job_analyst", "JD")
     role.trigger_keywords = ["JD", "岗位", "简历"]
 
     assert matched_keywords(role, "看看这个 jd 的岗位要求") == ["JD", "岗位"]
@@ -134,8 +134,9 @@ async def test_receipt_arrives_before_the_roles_start_working(parts):
 
     async def notify(note: str) -> None:
         # The original complaint was silence: the receipt has to be out the door
-        # before any role has been asked anything.
-        assert client.calls == []
+        # before any *specialist* has been asked anything. The planner call is
+        # what produced the receipt, so it has necessarily already run.
+        assert [call for call in client.calls if call != "controller"] == []
         notes.append(note)
 
     chief = ChiefOfStaff(orchestrator, with_closing=False)
@@ -146,11 +147,11 @@ async def test_receipt_arrives_before_the_roles_start_working(parts):
 
     assert len(notes) == 1
     assert notes[0].startswith(f"📋 {CHIEF_DISPLAY_NAME} 已接单")
-    assert "JD Analyst、Resume Strategist" in notes[0]
+    assert "Job Analyst、Material Builder" in notes[0]
     intake = only(activity, "intake_completed")
     assert intake.phase == "intake"
     assert intake.role_id == "controller"
-    assert intake.selected_role_ids == ["jd_analyst", "resume_strategist"]
+    assert intake.selected_role_ids == ["job_analyst", "material_builder"]
 
 
 async def test_every_chief_event_joins_the_same_run(parts):
@@ -162,7 +163,9 @@ async def test_every_chief_event_joins_the_same_run(parts):
 
     run_ids = {event.run_id for event in activity.read(limit=200)}
     assert run_ids == {report.run_id}
-    assert kinds(activity).index("intake_completed") == 0
+    # Decomposition opens the run and the closing ends it.
+    assert kinds(activity)[0] == "plan_created"
+    assert kinds(activity)[1] == "intake_completed"
     assert kinds(activity)[-1] == "closing_created"
 
 
@@ -172,7 +175,7 @@ async def test_one_selected_role_looks_at_the_picture_itself(parts):
     await ChiefOfStaff(orchestrator, with_closing=False).run(
         RunRequest(
             query="改我的简历",
-            requested_roles=["resume_strategist"],
+            requested_roles=["material_builder"],
             mode="single",
             use_judge=False,
             images=[image()],
@@ -180,11 +183,11 @@ async def test_one_selected_role_looks_at_the_picture_itself(parts):
     )
 
     # No transcription call, and the picture reached the role unchanged.
-    assert client.image_calls == [("resume_strategist", 1)]
+    assert client.image_calls == [("material_builder", 1)]
     read = only(activity, "attachment_read")
     assert read.status == "ok"
     assert read.metrics["transcribed"] is False
-    assert "Resume Strategist" in (read.output_excerpt or "")
+    assert "Material Builder" in (read.output_excerpt or "")
 
 
 async def test_several_roles_share_one_transcription(parts):
@@ -194,16 +197,18 @@ async def test_several_roles_share_one_transcription(parts):
         RunRequest(query="分析 JD 并优化简历", use_judge=False, images=[image()])
     )
 
-    # The chief pays the image tokens once; the roles get text.
-    assert client.image_calls[0] == ("controller", 1)
-    assert [count for _, count in client.image_calls[1:]] == [0, 0]
+    # The chief pays the image tokens once; the roles get text. The planner call
+    # comes first and never looks at the picture.
+    assert client.image_calls[0] == ("controller", 0)
+    assert client.image_calls[1] == ("controller", 1)
+    assert [count for _, count in client.image_calls[2:]] == [0, 0]
     read = only(activity, "attachment_read")
     assert read.metrics["image_count"] == 1
     analyst_query = next(
-        query for role_id, query in client.queries if role_id == "jd_analyst"
+        query for role_id, query in client.queries if role_id == "job_analyst"
     )
     assert "用户附件" in analyst_query
-    assert report.metrics.model_calls == 3
+    assert report.metrics.model_calls == 4
 
 
 async def test_a_failed_transcription_hands_the_raw_pictures_over_instead(parts):
@@ -267,7 +272,8 @@ async def test_closing_can_be_turned_off_without_losing_the_receipt(parts):
     assert CLOSING_HEADING not in report.final_output
     assert "closing_created" not in kinds(activity)
     assert "intake_completed" in kinds(activity)
-    assert client.calls == ["jd_analyst", "resume_strategist"]
+    # controller = the planner deciding who works this run.
+    assert client.calls == ["controller", "job_analyst", "material_builder"]
 
 
 async def test_the_chiefs_own_calls_show_up_in_the_metrics(parts):
@@ -277,9 +283,9 @@ async def test_the_chiefs_own_calls_show_up_in_the_metrics(parts):
     plain = await orchestrator.run(request)
     chief_run = await ChiefOfStaff(orchestrator, with_closing=True).run(request)
 
-    # Reading the picture and writing the closing are two more calls, and the
-    # report must not pretend they were free.
-    assert chief_run.metrics.model_calls == plain.metrics.model_calls + 2
+    # Planning, reading the picture and writing the closing are three more
+    # calls, and the report must not pretend they were free.
+    assert chief_run.metrics.model_calls == plain.metrics.model_calls + 3
     assert chief_run.metrics.output_tokens > plain.metrics.output_tokens
 
 
@@ -307,5 +313,5 @@ async def test_a_failed_closing_still_returns_the_audited_answer(parts):
     )
 
     assert CLOSING_HEADING not in report.final_output
-    assert "[JD Analyst]" in report.final_output
+    assert "[Job Analyst]" in report.final_output
     assert only(activity, "closing_created").status == "error"

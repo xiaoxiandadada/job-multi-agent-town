@@ -113,4 +113,4 @@ def test_discovered_cases_ignore_job_ids_seen_only_once(tmp_path):
 def test_discovery_returns_nothing_for_a_role_with_no_memories(tmp_path):
     store = build_store(tmp_path)
 
-    assert discover_cases(store, role_id="resume_strategist") == []
+    assert discover_cases(store, role_id="material_builder") == []

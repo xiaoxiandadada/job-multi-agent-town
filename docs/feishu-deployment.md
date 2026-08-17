@@ -144,6 +144,42 @@ benchmark 和演示 GIF，再由容器平台拉取仓库部署。
 `@角色机器人 <问题>`。其普通消息会绕过自动路由，固定进入绑定 role；角色正文
 保留，Judge 以附录形式核验。
 
+### 发一个 `/` 展开命令面板
+
+群里或单聊里只发一个 `/`（群里仍需 `@Chief of Staff /`），机器人会把可用命令按
+「求职流程 / 工具命令」两组展开，并标出每个命令会唤起几个角色——那是用户在按下
+回车前唯一能看到的耗时信号。
+
+面板由 `commands.command_palette_markdown()` 从 `command_catalog()` 现场生成，
+和网页输入框读的是同一个真源。**上面那张手写表格会随代码漂移，`/` 的输出不会，
+两处对不上时以 `/` 为准。**
+
+### 让飞书原生的 `/` 面板也列出这些命令
+
+上一节说的是机器人自己回一张表。飞书输入框里输 `/` 唤起的那个原生面板是另一回事：
+它只列开放平台里配置的**快捷指令**，代码创建不了，得在
+[开放平台](https://open.feishu.cn/app) → 选择应用 → 「机器人」→「快捷指令」里逐条添加。
+
+指令内容必须和命令字面量完全一致，否则点击后发出的文本会被解析器拒绝：
+
+| 指令名 | 指令内容 | 是否需要补参数 |
+| --- | --- | --- |
+| 今日流程 | `/today` | 否 |
+| 匹配度 | `/match ` | 是，接岗位或 JD |
+| 岗位侦察 | `/job ` | 是 |
+| 投递材料 | `/apply ` | 是 |
+| 面试准备 | `/interview ` | 是 |
+| 知识拆解 | `/knowledge ` | 是 |
+| 全员协作 | `/team ` | 是 |
+| 问一个角色 | `/ask job_analyst ` | 是，接问题 |
+| 模拟面试 | `/mock start ` | 是，接主题 |
+| 查看角色 | `/roles` | 否 |
+| 今日日报 | `/daily` | 否 |
+
+需要补参数的那几条，指令内容末尾留一个空格，点击后光标就停在参数位置。
+
+`/mock` 与 `/match` 是本文上面表格漏掉的两条，配置时不要照那张表填。
+
 `/group-create` 只发送给总控机器人。除上面的三项消息权限外，总控还需要
 `im:chat:create` 与 `im:chat.members:write_only`；七个角色应用不需要这两项。
 命令把发起人设为群主，加入总控和已配置角色，并以本地状态文件保证幂等。只有全部
@@ -228,6 +264,75 @@ uv run job-agent-push-daily --full
 uv run job-agent-write-daily --date 2026-08-05
 uv run job-agent-push-daily --generate
 ```
+
+### 角色资料包放在哪
+
+所有角色的 `local_docs` 都从**仓库外**的一个目录读取。`role_context.default_prepare_dir`
+解析的是 `role_context.py` 往上四级再加 `prepare`，也就是把仓库整个放进
+`.../interview/projects/ai-job-agent` 时，资料包在 `.../interview/prepare`——
+不是仓库根下的 `prepare/`。这个位置看着是刻意的：简历和岗位表是个人材料，不该进
+公开仓库。用 `JOB_AGENT_PREPARE_DIR` 可以显式指定。
+
+目录不存在或为空时不会报错，只是每个角色的资料上下文都是 0 字符，表现为：Job Scout
+说岗位表里什么都没有、Match Scorer 打不出分（于是投递提醒永远不触发）、Material
+Builder 无从改简历。想确认当前读到了什么：
+
+```bash
+uv run python -c "
+from job_agent_harness.role_context import build_role_context, default_prepare_dir
+from job_agent_harness.runtime import build_registry
+print(default_prepare_dir())
+reg = build_registry()
+for rid in ('job_scout', 'match_scorer', 'job_analyst'):
+    print(rid, len(build_role_context(reg.get(rid)) or ''))
+"
+```
+
+需要的 10 个文件见 `role_context.ROLE_CONTEXT_FILES`，按角色分组。
+
+### 巡检发现岗位后自动接着跑
+
+Job Scout 的巡检原本只写事件流：搜完就停，凌晨发现的强匹配要等你下次打开飞书才看见。
+现在一次成功巡检会把证据交给下游继续跑，并在分数达标时推提醒。
+
+链条停在打分，不继续改简历：那之后是「要不要投」的人工决策。想要材料和面试准备，
+用 `/apply`、`/interview` 显式触发。
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `JOB_AGENT_PATROL_FOLLOWUP` | `1` | 关掉就退回「只巡检、只记事件流」 |
+| `JOB_AGENT_PATROL_FOLLOWUP_ROLES` | `job_analyst,match_scorer` | 按顺序 collaborative 执行 |
+
+两个刹车。一是**没带回官方链接就不触发**：Scout 的契约是「没有官方链接的岗位不要
+输出」，所以链接是最省事又可靠的「真有岗位」信号；少了这道判断，每次「找不到」都要
+白花两个角色去分析这三个字。日志里会写明「巡检没有带回官方链接，未触发下游分析」。
+
+二是**同一个岗位只提醒一次**：巡检 15 分钟一轮，而岗位表变化慢得多，否则同一个 82%
+会一小时推四遍，最后训练出的结果是你忽略这类通知。已推记录在
+`data/runtime/match_alerts.json`，按「公司 + 岗位名」去重而不是按 URL——同一个岗位
+换条链接找到还是同一个岗位。
+
+下游失败只记日志、不影响巡检本身：巡检已经成功且产出已入库，让一个纯增益的步骤把
+巡检标记成失败，会触发指数退避、直接把常驻巡检停掉。
+
+### 匹配度达标就提醒投递
+
+Match Scorer 本来只把报告放回你问它的那个会话里，所以常驻巡检时段跑出来的高分要等
+你下次打开飞书才看见。达到阈值时它现在会自己再发一条短提醒：分数、公司、岗位、
+官方链接、最强项与最弱项，以及投递前顺手能做的动作。
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `JOB_AGENT_MATCH_ALERT` | `1` | 默认开；关掉只影响提醒，报告照发 |
+| `JOB_AGENT_MATCH_ALERT_THRESHOLD` | `70` | 达到或超过就推，含等号；填错退回 70 |
+
+三个条件必须同时成立才推，各自挡掉一种不该打扰你的情况：分数过线、`blockers`
+为空、`verdict` 不是「不建议」。第二条不与第一条重复——`MatchReport.recomputed()`
+虽然会把有硬阻断的报告封顶到 40，但那是评分算法的实现细节，靠它兜底意味着改一次
+权重就可能开始推你根本不满足门槛的岗位。
+
+提醒发送独立于报告本身：报告因为过长而回包失败时，这条短提醒仍会送到——那正是它
+最该出现的时候。提醒发送失败只记日志，不影响运行。
 
 LangGraph 对照运行：
 

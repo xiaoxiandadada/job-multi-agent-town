@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from .models import RoleSpec
+from .models import RoleSpec, RunPlan
 
 
 TaskPhase = Literal["discovery", "analysis", "action", "judge", "delivery"]
@@ -67,25 +67,20 @@ ROLE_ACCEPTANCE_CRITERIA = {
         "给出可访问的官方 JD 来源",
         "标记截止时间和待核验风险",
     ],
-    "jd_analyst": [
-        "区分硬要求与加分项",
-        "提取关键词和技能缺口",
-        "所有判断可回指 JD 原文",
+    "job_analyst": [
+        "区分硬要求与加分项，提取关键词和技能缺口",
+        "覆盖核心概念、技术栈和工程难点，给出学习优先级",
+        "所有判断可回指 JD 原文；区分通用知识与公司特定推断",
     ],
-    "job_knowledge_curator": [
-        "覆盖核心概念、技术栈和工程难点",
-        "给出面试问题与学习优先级",
-        "区分通用知识和公司特定推断",
+    "match_scorer": [
+        "五个维度齐全，分数可与其他岗位比较",
+        "每个维度的分数都指向具体证据",
+        "硬性阻断项单独列出，不埋在低分里",
     ],
-    "resume_strategist": [
-        "选择明确的简历版本",
-        "bullet 包含问题、方法、结果和指标",
-        "不虚构经历或量化结果",
-    ],
-    "portfolio_coach": [
-        "给出最小可验证作品动作",
-        "包含样例数据、技术栈和验收指标",
-        "能形成 GitHub 可展示证据",
+    "material_builder": [
+        "简历部分：选定版本，bullet 含问题、方法、结果和指标",
+        "作品部分：最小可验证动作，含样例数据、技术栈和验收指标",
+        "不虚构经历或量化结果，能形成可展示证据",
     ],
     "interview_coach": [
         "问题映射到 JD 与项目证据",
@@ -108,11 +103,17 @@ def role_phase(role: RoleSpec, mode: str) -> TaskPhase:
     if role.role_id == "job_scout":
         return "discovery"
     if role.workflow_stage == "context" or role.role_id in {
-        "jd_analyst",
-        "job_knowledge_curator",
+        "job_analyst",
+        "match_scorer",
     }:
         return "analysis"
     return "action"
+
+
+#: Execution order of the collaborative phases. A dependency is only real if it
+#: points at an earlier phase, because that is the only ordering the
+#: orchestrator actually enforces.
+PHASE_ORDER = {"discovery": 0, "analysis": 1, "action": 2, "judge": 3, "delivery": 4}
 
 
 def build_run_task_graph(
@@ -122,6 +123,7 @@ def build_run_task_graph(
     roles: list[RoleSpec],
     mode: str,
     use_judge: bool,
+    plan: RunPlan | None = None,
 ) -> TaskGraph:
     work_roles = [role for role in roles if role.role_id != "judge"]
     phases = {role.role_id: role_phase(role, mode) for role in work_roles}
@@ -136,6 +138,11 @@ def build_run_task_graph(
         if phases[role.role_id] == "analysis"
     ]
     upstream_ids = [*discovery_ids, *analysis_ids]
+    planned = (
+        {subtask.role_id: subtask for subtask in plan.subtasks}
+        if plan is not None and plan.source == "planner"
+        else {}
+    )
     tasks: list[TaskNode] = []
     for role in work_roles:
         phase = phases[role.role_id]
@@ -145,12 +152,38 @@ def build_run_task_graph(
             dependencies = upstream_ids
         else:
             dependencies = []
+        subtask = planned.get(role.role_id)
+        if subtask is not None:
+            # Add the planner's own edges, but only the ones this run will
+            # honour. Execution order comes from ``workflow_stage``, so drawing
+            # a same-phase edge would show the user a dependency that the two
+            # parallel roles never actually observe.
+            dependencies = list(
+                dict.fromkeys(
+                    [
+                        *dependencies,
+                        *(
+                            upstream
+                            for upstream in subtask.depends_on
+                            if upstream in phases
+                            and PHASE_ORDER[phases[upstream]]
+                            < PHASE_ORDER[phase]
+                        ),
+                    ]
+                )
+            )
         tasks.append(
             TaskNode(
                 task_id=role.role_id,
-                title=f"{role.display_name}：{role.goal}",
+                title=(
+                    f"{role.display_name}：{subtask.task}"
+                    if subtask is not None
+                    else f"{role.display_name}：{role.goal}"
+                ),
                 description=(
-                    f"围绕本轮任务完成角色交付：{query[:1200]}"
+                    f"{subtask.why}\n\n围绕本轮任务完成角色交付：{query[:1200]}"
+                    if subtask is not None and subtask.why
+                    else f"围绕本轮任务完成角色交付：{query[:1200]}"
                 ),
                 role_id=role.role_id,
                 display_name=role.display_name,
@@ -181,7 +214,11 @@ def build_run_task_graph(
     return TaskGraph(
         graph_id=run_id,
         run_id=run_id,
-        title="LangGraph 求职协作任务图",
+        title=(
+            plan.intent
+            if plan is not None and plan.source == "planner" and plan.intent
+            else "LangGraph 求职协作任务图"
+        ),
         query=query,
         source="interactive",
         mode=mode,

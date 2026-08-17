@@ -293,13 +293,58 @@ class OpenAICompatibleClient(RolePromptComposer):
 
 
 class MockModelClient:
-    def __init__(self, latency_seconds: float = 0):
+    """Deterministic stand-in for a provider, used by the tests and benchmarks.
+
+    ``plan_reply`` exists because the Chief of Staff's planner expects JSON. A
+    mock that always answered with prose would send every test down the keyword
+    fallback, so the real decomposition path would never be exercised. Set it to
+    a non-JSON string to test that fallback on purpose.
+    """
+
+    #: Marker from ``PLANNER_ROLE``'s prompt. Matching on the request rather than
+    #: on ``role_id`` keeps the vision and closing calls (same ``controller`` id)
+    #: answering normally.
+    planner_marker = "可选角色："
+
+    def __init__(
+        self,
+        latency_seconds: float = 0,
+        plan_reply: str | None = None,
+    ):
         self.latency_seconds = latency_seconds
+        self.plan_reply = plan_reply
         self.calls: list[str] = []
         self.queries: list[tuple[str, str]] = []
         #: (role_id, image count) per call — lets a test prove which roles were
         #: actually handed pictures without decoding base64.
         self.image_calls: list[tuple[str, int]] = []
+
+    def _default_plan(self, query: str) -> str:
+        """Pick every candidate the prompt offered, so routing stays visible.
+
+        Deliberately not "choose one": a mock that always narrowed to a single
+        role would hide selection bugs behind its own opinion. Tests that care
+        about narrowing pass an explicit ``plan_reply``.
+        """
+
+        role_ids = re.findall(r"^- ([a-z][a-z0-9_]*)（", query, re.MULTILINE)
+        return json.dumps(
+            {
+                "intent": "mock 拆解",
+                "subtasks": [
+                    {
+                        "role_id": role_id,
+                        "task": f"{role_id} 的 mock 子任务",
+                        "why": "mock",
+                        "depends_on": [],
+                    }
+                    for role_id in role_ids
+                ],
+                "need_judge": True,
+                "skipped": "",
+            },
+            ensure_ascii=False,
+        )
 
     async def complete(
         self,
@@ -315,6 +360,18 @@ class MockModelClient:
         self.image_calls.append((role.role_id, len(images)))
         if self.latency_seconds:
             await asyncio.sleep(self.latency_seconds)
+        if self.planner_marker in query:
+            content = (
+                self.plan_reply
+                if self.plan_reply is not None
+                else self._default_plan(query)
+            )
+            return ModelReply(
+                content=content,
+                input_tokens=len(query),
+                output_tokens=8,
+                model="mock",
+            )
         seen = f"[看到 {len(images)} 张图片] " if images else ""
         return ModelReply(
             content=f"[{role.display_name}] {seen}{query}",

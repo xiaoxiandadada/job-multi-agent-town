@@ -102,21 +102,20 @@ def test_chat_id_is_remembered_without_entering_source_control(tmp_path):
     assert load_chat_id(tmp_path) == "oc_test"
 
 
-def test_daily_report_is_partitioned_across_all_seven_role_bots(tmp_path):
+def test_daily_report_is_partitioned_across_every_role_bot(tmp_path):
     role_digests = build_role_daily_digests(SAMPLE_DAILY, "2026-07-26")
 
     assert set(role_digests) == {
         "job_scout",
-        "jd_analyst",
-        "job_knowledge_curator",
-        "resume_strategist",
-        "portfolio_coach",
+        "job_analyst",
+        "match_scorer",
+        "material_builder",
         "interview_coach",
         "judge",
     }
     assert "目标岗位" in role_digests["job_scout"]
-    assert "Agent Evaluation" in role_digests["job_knowledge_curator"]
-    assert "Trace 回归器" in role_digests["portfolio_coach"]
+    assert "Agent Evaluation" in role_digests["job_analyst"]
+    assert "Trace 回归器" in role_digests["material_builder"]
     assert "今天先做三件事" in role_digests["judge"]
     assert all("/Users/" not in message for message in role_digests.values())
 

@@ -60,7 +60,7 @@ DAILY_SECTIONS: tuple[DailySection, ...] = (
     ),
     DailySection(
         heading="今日 AI / Agent 学习任务",
-        role_id="job_knowledge_curator",
+        role_id="job_analyst",
         ask=(
             "针对上面这些岗位，安排今天一天能做完的学习任务。分成主线书章节、"
             "配套题目（SQL / LeetCode / ML 面试题 / 概率统计各一道）两部分，"
@@ -69,7 +69,7 @@ DAILY_SECTIONS: tuple[DailySection, ...] = (
     ),
     DailySection(
         heading="今日简历优化动作",
-        role_id="resume_strategist",
+        role_id="material_builder",
         ask=(
             "针对最优先的那个岗位，给出今天要改的简历动作：选哪个简历版本、"
             "改写哪几条 bullet（给出改写前后）、补哪些关键词。只写今天做得完的。"
@@ -77,7 +77,7 @@ DAILY_SECTIONS: tuple[DailySection, ...] = (
     ),
     DailySection(
         heading="今日 Vibe Coding 灵感",
-        role_id="portfolio_coach",
+        role_id="material_builder",
         ask=(
             "给出 1-2 个今天能动手、和上面岗位直接相关的 Vibe Coding 点子，"
             "每个写清要验证什么、最小可交付是什么、怎么算做完。"
@@ -85,7 +85,7 @@ DAILY_SECTIONS: tuple[DailySection, ...] = (
     ),
     DailySection(
         heading="今日作品推进",
-        role_id="portfolio_coach",
+        role_id="material_builder",
         ask=(
             "现有作品集今天推进哪一块：具体改哪个模块、验收标准是什么、"
             "能不能在今天之内截图或录屏证明它跑通了。"

@@ -10,22 +10,30 @@ ROLE_CONTEXT_FILES = {
     "job_scout": [
         "jobs/autumn_job_tracker.md",
     ],
-    "jd_analyst": [
+    # Merged from the old jd_analyst + job_knowledge_curator: it needs the job
+    # table and search keywords to read requirements, and the learning paths to
+    # explain them to interview depth.
+    "job_analyst": [
         "jobs/autumn_job_tracker.md",
         "jobs/search_keywords.md",
-    ],
-    "job_knowledge_curator": [
         "books/book_based_learning_plan.md",
         "agent/agent_learning_path.md",
         "llm/rag_llm_learning_path.md",
     ],
-    "resume_strategist": [
+    # Scoring compares a JD against the user's actual evidence, so it needs
+    # both sides: the job table and every resume version.
+    "match_scorer": [
+        "jobs/autumn_job_tracker.md",
         "resume/resume_agent_version.md",
         "resume/resume_algorithm_version.md",
         "resume/resume_data_science_version.md",
         "portfolio/portfolio_roadmap.md",
     ],
-    "portfolio_coach": [
+    # Merged from resume_strategist + portfolio_coach.
+    "material_builder": [
+        "resume/resume_agent_version.md",
+        "resume/resume_algorithm_version.md",
+        "resume/resume_data_science_version.md",
         "portfolio/portfolio_roadmap.md",
         "ideas/vibe_coding_idea_bank.md",
     ],

@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -7,7 +8,14 @@ from job_agent_harness.always_on import (
     AlwaysOnWatcher,
     SingleInstanceLock,
 )
-from job_agent_harness.models import AgentResult, RunMetrics, RunReport
+from job_agent_harness.match_alert import AlertLedger
+from job_agent_harness.models import (
+    AgentResult,
+    MatchDimension,
+    MatchReport,
+    RunMetrics,
+    RunReport,
+)
 
 
 def make_report(run_id: str = "run-1", *, results=None, final_output=None) -> RunReport:
@@ -331,3 +339,195 @@ async def test_an_empty_answer_also_counts_as_a_failed_patrol(tmp_path):
 
     assert watcher.failures == 1
     assert watcher.last_error == "巡检没有产出任何内容"
+
+
+# --------------------------------------------------------------- follow-up chain
+#
+# A patrol used to end at the event log, so a posting found at 3am was a posting
+# nobody was told about. These cover the chain that carries findings into scoring
+# and the two things that must stop it: no posting, and one already pushed.
+
+
+FOUND_JOBS = (
+    "## 新岗位\n"
+    "字节跳动 · AI Agent 工程师（校招）\n"
+    "https://jobs.bytedance.com/campus/position/123456\n"
+    "> 2027 届本科及以上，熟悉大模型应用开发"
+)
+
+NOTHING_FOUND = "巡检结论：找不到符合 2027 届正式校招条件的新岗位，岗位表无需更新。"
+
+
+def scored_report(overall: int, *, company: str = "字节跳动", blockers=()):
+    """A run whose scorer produced a report, as the follow-up chain returns it."""
+
+    report = MatchReport(
+        company=company,
+        job_title="AI Agent 工程师",
+        job_url="https://jobs.bytedance.com/campus/position/123456",
+        overall=overall,
+        verdict="值得投",
+        dimensions=[
+            MatchDimension(
+                name="核心技能", score=overall, weight=1.0, evidence="三个 Agent 项目"
+            )
+        ],
+        blockers=list(blockers),
+    )
+    return make_report(
+        "followup-run",
+        results=[
+            AgentResult(
+                role_id="match_scorer",
+                display_name="Match Scorer",
+                output="渲染后的评分表",
+                match_report=report,
+            )
+        ],
+        final_output="评分完成",
+    )
+
+
+async def test_a_patrol_with_a_posting_hands_off_to_analysis_and_scoring(tmp_path):
+    """The chain the user asked for: scout finds a job, downstream continues."""
+
+    orchestrator = FakeOrchestrator(
+        [make_report(final_output=FOUND_JOBS), scored_report(45)]
+    )
+    watcher = build_watcher(tmp_path, orchestrator, FakeClock(stop_after=2))
+
+    await watcher.patrol("job_scout", 0)
+
+    assert len(orchestrator.requests) == 2
+    followup = orchestrator.requests[1]
+    assert followup.requested_roles == ["job_analyst", "match_scorer"]
+    # collaborative, so the scorer reads the analyst's handoff rather than the
+    # raw patrol text.
+    assert followup.mode == "collaborative"
+    assert followup.use_judge is False
+    # The scout's actual findings have to travel, not just a "go look again".
+    assert "jobs.bytedance.com" in followup.query
+
+
+async def test_a_patrol_without_a_posting_spends_nothing_downstream(tmp_path):
+    """A quiet patrol must not pay two roles to analyse the word 找不到."""
+
+    orchestrator = FakeOrchestrator([make_report(final_output=NOTHING_FOUND)])
+    watcher = build_watcher(tmp_path, orchestrator, FakeClock(stop_after=2))
+
+    await watcher.patrol("job_scout", 0)
+
+    assert len(orchestrator.requests) == 1
+
+
+async def test_the_chain_can_be_switched_off(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOB_AGENT_PATROL_FOLLOWUP", "0")
+    orchestrator = FakeOrchestrator([make_report(final_output=FOUND_JOBS)])
+    watcher = build_watcher(tmp_path, orchestrator, FakeClock(stop_after=2))
+
+    await watcher.patrol("job_scout", 0)
+
+    assert len(orchestrator.requests) == 1
+
+
+async def test_only_the_scout_starts_the_chain(tmp_path):
+    """Another role's patrol output is not a job listing, whatever it contains."""
+
+    orchestrator = FakeOrchestrator([make_report(final_output=FOUND_JOBS)])
+    watcher = build_watcher(
+        tmp_path,
+        orchestrator,
+        FakeClock(stop_after=2),
+        roles=["interview_coach"],
+    )
+
+    await watcher.patrol("interview_coach", 0)
+
+    assert len(orchestrator.requests) == 1
+
+
+async def test_a_qualifying_score_is_pushed_once_and_not_again(tmp_path):
+    """De-duplication is the difference between a nudge and a nag.
+
+    The patrol runs every fifteen minutes against a job table that changes far
+    more slowly, so the same 82% would otherwise be pushed four times an hour.
+    """
+
+    pushed = []
+
+    orchestrator = FakeOrchestrator(
+        [
+            make_report(final_output=FOUND_JOBS),
+            scored_report(82),
+            make_report(final_output=FOUND_JOBS),
+            scored_report(82),
+        ]
+    )
+    # lock_path is what ``data_dir()`` derives state from, so passing it keeps the
+    # ledger inside tmp_path. Without it the watcher falls back to the real
+    # runtime directory and the test writes into deployment state — which then
+    # makes the second run of this very test see "already pushed" and fail.
+    watcher = build_watcher(
+        tmp_path,
+        orchestrator,
+        FakeClock(stop_after=2),
+        lock_path=tmp_path / "always_on.lock",
+    )
+    assert watcher.data_dir() == tmp_path
+
+    async def fake_send(chat_id, message):
+        pushed.append(message)
+        return SimpleNamespace(success=True, error=None)
+
+    real_push = watcher.push_alert
+
+    async def tracked_push(run_id, report):
+        # Exercise the real ledger logic, stubbing only the transport.
+        ledger = AlertLedger(watcher.data_dir() / "match_alerts.json")
+        if ledger.already_alerted(report):
+            return
+        await fake_send("oc_group", {"markdown": "nudge"})
+        ledger.remember(report)
+
+    watcher.push_alert = tracked_push
+    assert real_push is not None
+
+    await watcher.patrol("job_scout", 0)
+    await watcher.patrol("job_scout", 1)
+
+    assert len(pushed) == 1
+
+
+async def test_a_score_below_the_bar_is_not_pushed(tmp_path):
+    calls = []
+    orchestrator = FakeOrchestrator(
+        [make_report(final_output=FOUND_JOBS), scored_report(55)]
+    )
+    watcher = build_watcher(tmp_path, orchestrator, FakeClock(stop_after=2))
+
+    async def tracked_push(run_id, report):
+        calls.append(report)
+
+    watcher.push_alert = tracked_push
+
+    await watcher.patrol("job_scout", 0)
+
+    assert calls == []
+
+
+async def test_a_failed_followup_does_not_fail_the_patrol(tmp_path):
+    """The chain is additive; a break in it must not stop the shift.
+
+    Marking the patrol failed would trip the exponential backoff and stop
+    patrolling altogether over a problem in a step that only adds value.
+    """
+
+    orchestrator = FakeOrchestrator(
+        [make_report(final_output=FOUND_JOBS), RuntimeError("gateway down")]
+    )
+    watcher = build_watcher(tmp_path, orchestrator, FakeClock(stop_after=2))
+
+    await watcher.patrol("job_scout", 0)
+
+    assert watcher.failures == 0
+    assert watcher.last_error is None

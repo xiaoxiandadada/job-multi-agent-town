@@ -25,7 +25,7 @@ def test_town_snapshot_maps_live_run_to_agents_and_memories(tmp_path):
     registry.replace_all(
         [
             make_role("job_scout", "Job Scout"),
-            make_role("resume_strategist", "Resume Strategist"),
+            make_role("material_builder", "Material Builder"),
             make_role("judge", "Evidence Judge"),
         ]
     )
@@ -44,7 +44,7 @@ def test_town_snapshot_maps_live_run_to_agents_and_memories(tmp_path):
             status="completed",
             orchestrator="langgraph",
             phase="route",
-            selected_role_ids=["job_scout", "resume_strategist"],
+            selected_role_ids=["job_scout", "material_builder"],
         ),
         ActivityEvent(
             run_id="run-1",
@@ -65,7 +65,7 @@ def test_town_snapshot_maps_live_run_to_agents_and_memories(tmp_path):
             orchestrator="langgraph",
             phase="action",
             source_role_ids=["job_scout"],
-            target_role_ids=["resume_strategist"],
+            target_role_ids=["material_builder"],
             output_excerpt="共享岗位证据",
         ),
         ActivityEvent(
@@ -74,7 +74,7 @@ def test_town_snapshot_maps_live_run_to_agents_and_memories(tmp_path):
             status="running",
             orchestrator="langgraph",
             phase="action",
-            selected_role_ids=["resume_strategist"],
+            selected_role_ids=["material_builder"],
         ),
         ActivityEvent(
             run_id="run-1",
@@ -82,8 +82,8 @@ def test_town_snapshot_maps_live_run_to_agents_and_memories(tmp_path):
             status="running",
             orchestrator="langgraph",
             phase="action",
-            role_id="resume_strategist",
-            display_name="Resume Strategist",
+            role_id="material_builder",
+            display_name="Material Builder",
         ),
     ]
 
@@ -94,14 +94,14 @@ def test_town_snapshot_maps_live_run_to_agents_and_memories(tmp_path):
     assert snapshot.current_phase == "action"
     assert by_role["job_scout"].status == "ok"
     assert by_role["job_scout"].place == "Scout Outpost"
-    assert by_role["resume_strategist"].status == "running"
-    assert "action" in by_role["resume_strategist"].current_action
+    assert by_role["material_builder"].status == "running"
+    assert "action" in by_role["material_builder"].current_action
     assert any(
         memory.kind == "handoff_created"
-        for memory in by_role["resume_strategist"].memories
+        for memory in by_role["material_builder"].memories
     )
     assert snapshot.handoffs[0].target_role_ids == [
-        "resume_strategist"
+        "material_builder"
     ]
 
 
@@ -159,7 +159,7 @@ def test_town_replay_projects_task_dependencies_without_future_status(
     tmp_path,
 ):
     scout = make_role("job_scout", "Job Scout")
-    resume = make_role("resume_strategist", "Resume Strategist").model_copy(
+    resume = make_role("material_builder", "Material Builder").model_copy(
         update={"workflow_stage": "action"}
     )
     registry = RoleRegistry(tmp_path / "roles.json")
@@ -213,7 +213,7 @@ def test_town_replay_projects_task_dependencies_without_future_status(
 
     assert by_id["job_scout"].status == "running"
     assert by_id["job_scout"].progress == 50
-    assert by_id["resume_strategist"].status == "blocked"
+    assert by_id["material_builder"].status == "blocked"
     assert snapshot.task_graph.progress == 25
 
 
@@ -222,7 +222,7 @@ def test_routing_edges_come_from_real_dispatch_handoff_and_review(tmp_path):
     registry.replace_all(
         [
             make_role("job_scout", "Job Scout"),
-            make_role("resume_strategist", "Resume Strategist"),
+            make_role("material_builder", "Material Builder"),
             make_role("judge", "Evidence Judge"),
         ]
     )
@@ -234,7 +234,7 @@ def test_routing_edges_come_from_real_dispatch_handoff_and_review(tmp_path):
             status="completed",
             orchestrator="langgraph",
             phase="route",
-            selected_role_ids=["job_scout", "resume_strategist"],
+            selected_role_ids=["job_scout", "material_builder"],
         ),
         ActivityEvent(
             timestamp="2026-08-03T01:00:05+00:00",
@@ -254,7 +254,7 @@ def test_routing_edges_come_from_real_dispatch_handoff_and_review(tmp_path):
             orchestrator="langgraph",
             phase="action",
             source_role_ids=["job_scout"],
-            target_role_ids=["resume_strategist"],
+            target_role_ids=["material_builder"],
             output_excerpt="共享岗位证据",
         ),
         ActivityEvent(
@@ -264,7 +264,7 @@ def test_routing_edges_come_from_real_dispatch_handoff_and_review(tmp_path):
             status="ok",
             orchestrator="langgraph",
             phase="action",
-            role_id="resume_strategist",
+            role_id="material_builder",
             output_excerpt="给出简历版本",
         ),
         ActivityEvent(
@@ -285,9 +285,9 @@ def test_routing_edges_come_from_real_dispatch_handoff_and_review(tmp_path):
     }
 
     assert ("dispatch", "plaza", "job_scout") in edges
-    assert ("handoff", "job_scout", "resume_strategist") in edges
+    assert ("handoff", "job_scout", "material_builder") in edges
     assert ("review", "job_scout", "judge") in edges
-    assert ("review", "resume_strategist", "judge") in edges
+    assert ("review", "material_builder", "judge") in edges
     # The judge never hands work back to itself.
     assert ("review", "judge", "judge") not in edges
     assert snapshot.routes == sorted(
@@ -427,7 +427,7 @@ def test_a_patrol_does_not_steal_the_town_from_a_running_task(tmp_path):
     registry.replace_all(
         [
             make_role("job_scout", "Job Scout"),
-            make_role("jd_analyst", "JD Analyst"),
+            make_role("job_analyst", "Job Analyst"),
         ]
     )
     base = datetime(2026, 8, 4, 0, 0, tzinfo=timezone.utc)

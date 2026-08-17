@@ -9,13 +9,14 @@ from .cognition import MemoryStore
 from .model_client import ModelClient
 from .models import AgentResult, RoleSpec, RunMetrics, RunReport, RunRequest
 from .registry import RoleRegistry
+from .structured import structured_result
 from .tasks import TaskGraphStore, build_run_task_graph
 
 
 CONTEXT_ROLE_IDS = {
     "job_scout",
-    "jd_analyst",
-    "job_knowledge_curator",
+    "job_analyst",
+    "match_scorer",
 }
 
 
@@ -96,6 +97,43 @@ def workflow_stage(role: RoleSpec) -> str:
     return "action"
 
 
+def judge_needed_for(request: RunRequest) -> bool:
+    """Whether this run should pay for an audit pass, before it has results.
+
+    Used by the task graph, which is built up front and must not draw a Judge
+    node the run will never reach.
+    """
+
+    if not request.use_judge:
+        return False
+    if request.plan is not None:
+        return request.plan.need_judge
+    return True
+
+
+def judge_needed(request: RunRequest, successful: list[AgentResult]) -> bool:
+    """Whether the Evidence Judge earns its call on this run.
+
+    Cross-checking several specialists against each other is the Judge's real
+    job, and with two or more outputs it always runs. For a single output the
+    Judge only appended an "evidence audit" section (see ``merge_judged_output``)
+    — worth a call when the planner flagged the facts as error-prone, not worth
+    one for a direct question the specialist already answered.
+
+    With no plan at all the single-role case skips the audit too: that is the
+    latency the caller asked to remove, and ``use_judge=False`` was always
+    available to callers who want to force it off.
+    """
+
+    if not request.use_judge or not successful:
+        return False
+    if len(successful) > 1:
+        return True
+    if request.plan is not None:
+        return request.plan.need_judge
+    return False
+
+
 class MultiAgentOrchestrator:
     def __init__(
         self,
@@ -149,7 +187,8 @@ class MultiAgentOrchestrator:
                 query=request.query,
                 roles=selected_roles,
                 mode=request.mode,
-                use_judge=request.use_judge,
+                use_judge=judge_needed_for(request),
+                plan=request.plan,
             )
         )
         self._record(
@@ -168,6 +207,9 @@ class MultiAgentOrchestrator:
                 "task_count": len(graph.tasks),
                 "dependency_count": sum(
                     len(task.depends_on) for task in graph.tasks
+                ),
+                "plan_source": (
+                    request.plan.source if request.plan is not None else "keywords"
                 ),
             },
         )
@@ -199,6 +241,15 @@ class MultiAgentOrchestrator:
         return self.apply_run_overrides(self.registry.get(role_id), request)
 
     def select_roles(self, request: RunRequest):
+        """Who works this run.
+
+        Precedence is explicit request → plan → keywords. The keyword pass is
+        last on purpose: overlapping ``trigger_keywords`` are what made a
+        one-role question wake six specialists, so it is now only the fallback
+        for callers with no plan (the patrol, the daily push) and for a planner
+        that failed to produce one.
+        """
+
         roles = [
             role
             for role in self.registry.list_roles()
@@ -207,6 +258,13 @@ class MultiAgentOrchestrator:
         if request.requested_roles:
             selected = [
                 self.registry.get(role_id) for role_id in request.requested_roles
+            ]
+        elif request.plan is not None and request.plan.subtasks:
+            by_id = {role.role_id: role for role in roles}
+            selected = [
+                by_id[role_id]
+                for role_id in request.plan.role_ids()
+                if role_id in by_id
             ]
         else:
             lowered = request.query.casefold()
@@ -319,10 +377,16 @@ class MultiAgentOrchestrator:
                 self._complete_role(role, role_query, images),
                 timeout=role.timeout_seconds,
             )
+            # A data role returns JSON; everyone downstream — the Judge, the chat
+            # window, Feishu — reads Markdown. Render once here so no consumer has
+            # to know which roles are structured. The parsed object rides along
+            # because the apply-nudge has to compare a score, not read a table.
+            rendered, match_report = structured_result(role.role_id, reply.content)
             result = AgentResult(
                 role_id=role.role_id,
                 display_name=role.display_name,
-                output=reply.content,
+                output=rendered,
+                match_report=match_report,
                 latency_ms=(time.perf_counter() - started) * 1000,
                 input_tokens=reply.input_tokens,
                 output_tokens=reply.output_tokens,
@@ -642,7 +706,7 @@ class MultiAgentOrchestrator:
         successful = [result for result in results if result.status == "ok"]
         final_output = self._format_results(successful)
         judge_calls = 0
-        if request.use_judge and successful:
+        if judge_needed(request, successful):
             try:
                 judge = self.role_for_run("judge", request)
                 judge_input = build_judge_input(

@@ -245,6 +245,18 @@ function resolvedModelFor(role) {
     || 'default';
 }
 
+// Reasoning depth, per role. Separate from the model because a strong model at
+// "medium" often beats a weaker one at "high" — and because leaving it empty is
+// meaningful: Haiku rejects the parameter, so "继承" has to stay reachable.
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+function effortOptions(current) {
+  return [['', '继承'], ...EFFORT_LEVELS.map(level => [level, level])]
+    .map(([value, label]) =>
+      `<option value="${escapeHtml(value)}"${(current || '') === value ? ' selected' : ''}>${escapeHtml(label)}</option>`
+    ).join('');
+}
+
 /* ── 路由 / 班次 / 任务图 ──────────────────────────────── */
 
 function routesFor(run) {
@@ -534,7 +546,10 @@ function render() {
       <p class="agent-output">${escapeHtml(short(value.output))}</p>
       <div class="agent-model-config">
         <input id="model-${escapeHtml(role.role_id)}" list="model-options" value="${escapeHtml(role.model || '')}" placeholder="${escapeHtml(resolvedModelFor(role))}" aria-label="${escapeHtml(role.display_name)}模型">
-        <button class="secondary" data-model-role="${escapeHtml(role.role_id)}">应用模型</button>
+        <select id="effort-${escapeHtml(role.role_id)}" aria-label="${escapeHtml(role.display_name)}思考深度">
+          ${effortOptions(role.effort)}
+        </select>
+        <button class="secondary" data-model-role="${escapeHtml(role.role_id)}">应用</button>
       </div>
       <button class="secondary" data-toggle-role="${escapeHtml(role.role_id)}" data-enable="${role.enabled ? 'false' : 'true'}">${role.enabled ? '暂停角色' : '启用角色'}</button>
       <div class="agent-meta"><span>${escapeHtml(value.phase)}</span><span>${escapeHtml(value.model === '—' ? resolvedModelFor(role) : value.model)}</span><span>${fmtMs(value.latency)}</span></div>
@@ -822,17 +837,20 @@ async function toggleRole(roleId, enabled) {
 async function configureRoleModel(roleId) {
   const input = document.getElementById(`model-${roleId}`);
   const model = input?.value.trim() || null;
+  // Empty means "inherit the deployment default", which is a real setting, not
+  // a missing one — send null rather than dropping the key.
+  const effort = document.getElementById(`effort-${roleId}`)?.value || null;
   const response = await fetch(`/api/roles/${encodeURIComponent(roleId)}`, {
     method: 'PATCH',
     headers: {'content-type': 'application/json'},
-    body: JSON.stringify({model}),
+    body: JSON.stringify({model, effort}),
   });
   const payload = await response.json();
   if (!response.ok) {
     chat.note(`模型配置失败：${JSON.stringify(payload)}`);
     return;
   }
-  chat.note(`${payload.role.display_name} 模型已更新为 ${model || 'profile fallback'}，下一次 @ 该角色立即生效。`);
+  chat.note(`${payload.role.display_name} 已更新为 ${model || 'profile fallback'} · effort ${effort || '继承'}，下一次 @ 该角色立即生效。`);
   await refresh();
 }
 

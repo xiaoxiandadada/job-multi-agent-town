@@ -18,12 +18,29 @@ from pathlib import Path
 from typing import Any
 
 from .model_client import RolePromptComposer
-from .models import ImageAttachment, ModelReply, RoleSpec
-from .tools_executor import LOCAL_TOOL_INSTRUCTIONS, LocalJobTools
+from .models import (
+    MATCH_REPORT_SCHEMA,
+    ImageAttachment,
+    ModelReply,
+    RoleSpec,
+)
+from .tools_executor import (
+    LOCAL_TOOL_NAMES,
+    LocalJobTools,
+    local_tool_instructions,
+)
 
 
 LOGGER = logging.getLogger("job_agent_harness.anthropic")
 
+
+#: Roles whose output is data rather than prose, keyed by ``role_id``.
+#: Deliberately in code and not in ``roles.json``: a JSON Schema is one half
+#: of a contract whose other half is the Pydantic model that parses it, and a
+#: schema that drifts from its parser is worse than no schema at all.
+STRUCTURED_OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "match_scorer": MATCH_REPORT_SCHEMA,
+}
 
 WEB_SEARCH_TOOL_TYPE = "web_search_20260209"
 WEB_FETCH_TOOL_TYPE = "web_fetch_20260209"
@@ -235,10 +252,33 @@ class AnthropicClient(RolePromptComposer):
             self._client = AsyncAnthropic(**options)
         return self._client
 
+    def local_tool_names_for(self, role: RoleSpec) -> list[str]:
+        """Which locally-executed tools this role gets.
+
+        ``web_search`` is the broad opt-in and means "all of them". Naming a tool
+        directly in ``RoleSpec.tools`` is the narrow form, and the difference is
+        load-bearing for the judge: it needs ``fetch_url`` to verify a link an
+        upstream role supplied, but must *not* get ``list_tracked_jobs``, which
+        would invite it to introduce jobs no upstream role ever mentioned — the
+        opposite of its "only keep what upstream supports" contract.
+        """
+
+        named = [name for name in LOCAL_TOOL_NAMES if name in role.tools]
+        if named:
+            return named
+        return list(LOCAL_TOOL_NAMES) if "web_search" in role.tools else []
+
     def web_mode_for(self, role: RoleSpec) -> str:
         """Which evidence tools this role gets on this provider."""
 
-        if self.web_mode == "off" or "web_search" not in role.tools:
+        if self.web_mode == "off":
+            return "off"
+        if any(name in role.tools for name in LOCAL_TOOL_NAMES):
+            # Naming a local tool is a request for the local executor, not for
+            # the server-side search pair — there is no server equivalent of
+            # "fetch only this, never search".
+            return "local"
+        if "web_search" not in role.tools:
             return "off"
         if self.web_mode == "local":
             return "local"
@@ -283,12 +323,23 @@ class AnthropicClient(RolePromptComposer):
     def local_tools_for(self, role: RoleSpec) -> list[dict[str, Any]]:
         if self.web_mode_for(role) != "local":
             return []
-        return self.local_tools.definitions()
+        return self.local_tools.definitions(self.local_tool_names_for(role))
 
     def max_tokens_for(self, role: RoleSpec) -> int:
         if role.model_profile == "knowledge":
             return max(self.max_output_tokens, self.knowledge_max_output_tokens)
         return self.max_output_tokens
+
+    def effort_for(self, role: RoleSpec) -> str:
+        """Reasoning depth for this role, else the deployment-wide default.
+
+        Empty means "send no ``output_config``", which is deliberately distinct
+        from sending ``high``: Haiku 4.5 rejects the effort parameter with a 400,
+        so a role pinned to Haiku must be able to end up with nothing rather than
+        inherit a level from the environment.
+        """
+
+        return (role.effort or self.effort or "").strip()
 
     def system_blocks_for(self, role: RoleSpec) -> list[dict[str, Any]]:
         text = self.system_prompt_for(role)
@@ -296,7 +347,7 @@ class AnthropicClient(RolePromptComposer):
         if mode == "server":
             text = f"{text}\n\n{SERVER_WEB_INSTRUCTIONS}"
         elif mode == "local":
-            text = f"{text}\n\n{LOCAL_TOOL_INSTRUCTIONS}"
+            text = f"{text}\n\n{local_tool_instructions(self.local_tool_names_for(role))}"
         block: dict[str, Any] = {"type": "text", "text": text}
         if self.cache_system_prompt:
             block["cache_control"] = {"type": "ephemeral"}
@@ -310,8 +361,20 @@ class AnthropicClient(RolePromptComposer):
         }
         if self.thinking:
             kwargs["thinking"] = {"type": "adaptive"}
-        if self.effort:
-            kwargs["output_config"] = {"effort": self.effort}
+        # effort and format share one object, so build it once rather than
+        # letting the second writer clobber the first.
+        output_config: dict[str, Any] = {}
+        effort = self.effort_for(role)
+        if effort:
+            output_config["effort"] = effort
+        schema = STRUCTURED_OUTPUT_SCHEMAS.get(role.role_id)
+        if schema is not None:
+            output_config["format"] = {
+                "type": "json_schema",
+                "schema": schema,
+            }
+        if output_config:
+            kwargs["output_config"] = output_config
         tools = self.server_tools_for(role) + self.local_tools_for(role)
         if tools:
             kwargs["tools"] = tools
@@ -740,8 +803,9 @@ class AnthropicClient(RolePromptComposer):
                 },
             ]
         elif mode == "local":
-            text = f"{text}\n\n{LOCAL_TOOL_INSTRUCTIONS}"
-            tools = self.local_tools.definitions()
+            names = self.local_tool_names_for(role)
+            text = f"{text}\n\n{local_tool_instructions(names)}"
+            tools = self.local_tools.definitions(names)
         block: dict[str, Any] = {"type": "text", "text": text}
         if self.cache_system_prompt:
             block["cache_control"] = {"type": "ephemeral"}

@@ -186,17 +186,17 @@ def make_role(role_id: str, display_name: str, enabled: bool = True):
 def test_load_bot_bindings_supports_controller_and_named_role_bots():
     roles = {
         "job_scout": make_role("job_scout", "Job Scout"),
-        "jd_analyst": make_role("jd_analyst", "JD Analyst"),
+        "job_analyst": make_role("job_analyst", "Job Analyst"),
     }
     registry = SimpleNamespace(get=roles.__getitem__)
     env = {
         "LARK_APP_ID": "cli_controller",
         "LARK_APP_SECRET": "controller-secret",
-        "JOB_AGENT_FEISHU_ROLE_BOTS": "job_scout,jd_analyst",
+        "JOB_AGENT_FEISHU_ROLE_BOTS": "job_scout,job_analyst",
         "LARK_ROLE_JOB_SCOUT_APP_ID": "cli_scout",
         "LARK_ROLE_JOB_SCOUT_APP_SECRET": "scout-secret",
-        "LARK_ROLE_JD_ANALYST_APP_ID": "cli_jd",
-        "LARK_ROLE_JD_ANALYST_APP_SECRET": "jd-secret",
+        "LARK_ROLE_JOB_ANALYST_APP_ID": "cli_jd",
+        "LARK_ROLE_JOB_ANALYST_APP_SECRET": "jd-secret",
     }
 
     bindings = load_bot_bindings(registry, env)
@@ -204,7 +204,7 @@ def test_load_bot_bindings_supports_controller_and_named_role_bots():
     assert [binding.identity_label for binding in bindings] == [
         "controller",
         "job_scout",
-        "jd_analyst",
+        "job_analyst",
     ]
     assert bindings[1].display_name == "Job Scout"
 
@@ -212,24 +212,24 @@ def test_load_bot_bindings_supports_controller_and_named_role_bots():
 def test_load_bot_bindings_can_select_one_process_isolated_identity():
     roles = {
         "job_scout": make_role("job_scout", "Job Scout"),
-        "jd_analyst": make_role("jd_analyst", "JD Analyst"),
+        "job_analyst": make_role("job_analyst", "Job Analyst"),
     }
     registry = SimpleNamespace(get=roles.__getitem__)
     env = {
         "LARK_APP_ID": "cli_controller",
         "LARK_APP_SECRET": "controller-secret",
-        "JOB_AGENT_FEISHU_ROLE_BOTS": "job_scout,jd_analyst",
-        "JOB_AGENT_FEISHU_BINDING": "jd_analyst",
+        "JOB_AGENT_FEISHU_ROLE_BOTS": "job_scout,job_analyst",
+        "JOB_AGENT_FEISHU_BINDING": "job_analyst",
         "LARK_ROLE_JOB_SCOUT_APP_ID": "cli_scout",
         "LARK_ROLE_JOB_SCOUT_APP_SECRET": "scout-secret",
-        "LARK_ROLE_JD_ANALYST_APP_ID": "cli_jd",
-        "LARK_ROLE_JD_ANALYST_APP_SECRET": "jd-secret",
+        "LARK_ROLE_JOB_ANALYST_APP_ID": "cli_jd",
+        "LARK_ROLE_JOB_ANALYST_APP_SECRET": "jd-secret",
     }
 
     bindings = load_bot_bindings(registry, env)
 
     assert [binding.identity_label for binding in bindings] == [
-        "jd_analyst"
+        "job_analyst"
     ]
 
 
@@ -261,9 +261,9 @@ def test_load_bot_bindings_rejects_missing_role_credentials():
 
 
 def test_role_bot_env_names_are_stable():
-    assert role_bot_env_names("job_knowledge_curator") == (
-        "LARK_ROLE_JOB_KNOWLEDGE_CURATOR_APP_ID",
-        "LARK_ROLE_JOB_KNOWLEDGE_CURATOR_APP_SECRET",
+    assert role_bot_env_names("job_analyst") == (
+        "LARK_ROLE_JOB_ANALYST_APP_ID",
+        "LARK_ROLE_JOB_ANALYST_APP_SECRET",
     )
 
 
@@ -271,10 +271,10 @@ def test_configured_role_bot_ids_are_deduplicated_in_order():
     assert configured_role_bot_ids(
         {
             "JOB_AGENT_FEISHU_ROLE_BOTS": (
-                "job_scout,jd_analyst,job_scout"
+                "job_scout,job_analyst,job_scout"
             )
         }
-    ) == ["job_scout", "jd_analyst"]
+    ) == ["job_scout", "job_analyst"]
 
 
 def test_bound_bot_routes_plain_question_to_its_role():
@@ -801,3 +801,87 @@ async def test_a_plain_question_to_the_coach_bot_still_runs_the_pipeline(
 async def test_the_coach_help_lists_the_mock_interview_commands():
     assert "/mock start" in binding_help(coach_binding())
     assert "语音" in binding_help(coach_binding())
+
+
+class PaletteChannel:
+    """Minimal channel that records what was sent back."""
+
+    def __init__(self):
+        self.callback = None
+        self.sent = []
+
+    def on(self, event, callback):
+        assert event == "message"
+        self.callback = callback
+
+    async def send(self, to, message):
+        self.sent.append((to, message))
+        return SimpleNamespace(success=True, error=None)
+
+
+@pytest.mark.asyncio
+async def test_a_bare_slash_expands_the_command_palette():
+    """The gesture users already have muscle memory for.
+
+    Ordering is the whole test: ``parse_run_command`` rejects any unrecognised
+    "/..." with 未知命令, so a "/" that fell through to it would answer a request
+    for the menu with an error. Asserting on the panel's own content proves the
+    interception happened before the parser saw it.
+    """
+
+    channel = PaletteChannel()
+    register_message_handler(
+        channel,
+        FeishuBotBinding(app_id="cli_controller", app_secret="secret"),
+        SimpleNamespace(),
+        SimpleNamespace(),
+        set(),
+    )
+
+    await channel.callback(
+        SimpleNamespace(
+            content_text="/",
+            mentions=(),
+            chat_id="oc_group",
+            sender_id="ou_user",
+        )
+    )
+
+    assert len(channel.sent) == 1
+    target, message = channel.sent[0]
+    assert target == "oc_group"
+    body = message["markdown"]
+    assert "可用命令" in body
+    assert "`/today` · 5 个角色" in body
+    assert "未知命令" not in body
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_slash_command_still_says_so():
+    """The palette must not have turned every typo into a menu.
+
+    ``/todya`` should be corrected, not silently answered with a command list —
+    that would hide the mistake and leave the user waiting for a run.
+    """
+
+    channel = PaletteChannel()
+    register_message_handler(
+        channel,
+        FeishuBotBinding(app_id="cli_controller", app_secret="secret"),
+        SimpleNamespace(),
+        SimpleNamespace(),
+        set(),
+    )
+
+    await channel.callback(
+        SimpleNamespace(
+            content_text="/todya",
+            mentions=(),
+            chat_id="oc_group",
+            sender_id="ou_user",
+        )
+    )
+
+    assert len(channel.sent) == 1
+    _target, message = channel.sent[0]
+    assert "未知命令" in str(message)

@@ -14,19 +14,21 @@ from .tasks import TaskGraph, TaskNode
 
 TOWN_PLACES = {
     "job_scout": "Scout Outpost",
-    "jd_analyst": "JD Lab",
-    "job_knowledge_curator": "Knowledge Library",
-    "resume_strategist": "Resume Workshop",
-    "portfolio_coach": "Portfolio Garage",
+    "job_analyst": "JD Lab",
+    "match_scorer": "Match Bureau",
+    "material_builder": "Material Workshop",
     "interview_coach": "Interview Arena",
     "judge": "Evidence Court",
 }
 ROLE_SCHEDULES = {
     "job_scout": ["核验届别与岗位类型", "检查官方来源", "更新机会优先级"],
-    "jd_analyst": ["提取硬要求", "区分加分项", "生成技能缺口"],
-    "job_knowledge_curator": ["补充领域知识", "整理技术栈", "安排学习优先级"],
-    "resume_strategist": ["选择简历版本", "映射项目证据", "改写量化 bullet"],
-    "portfolio_coach": ["选择最小作品动作", "定义验收指标", "产出展示材料"],
+    "job_analyst": ["提取硬要求与关键词", "生成技能缺口", "补充概念与技术栈"],
+    "match_scorer": ["核对硬性门槛", "逐维度取证打分", "算出投递优先级"],
+    "material_builder": [
+        "选择简历版本",
+        "改写量化 bullet",
+        "推进作品与验收指标",
+    ],
     "interview_coach": ["生成核心题目", "设计追问", "制定评分 rubric"],
     "judge": ["检查来源", "标记冲突与遗漏", "发布可执行结论"],
 }

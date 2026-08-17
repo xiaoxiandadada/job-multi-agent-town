@@ -21,7 +21,7 @@ async def test_langgraph_persists_live_activity_events(tmp_path):
     registry.replace_all(
         [
             make_role("job_scout"),
-            make_role("resume_strategist"),
+            make_role("material_builder"),
             make_role("judge"),
         ]
     )
@@ -37,7 +37,7 @@ async def test_langgraph_persists_live_activity_events(tmp_path):
     report = await graph.run(
         RunRequest(
             query="检索岗位并调整简历",
-            requested_roles=["job_scout", "resume_strategist"],
+            requested_roles=["job_scout", "material_builder"],
             mode="collaborative",
         ),
         thread_id="activity-run",
@@ -56,13 +56,13 @@ async def test_langgraph_persists_live_activity_events(tmp_path):
         event for event in events if event.kind == "handoff_created"
     )
     assert handoff.source_role_ids == ["job_scout"]
-    assert handoff.target_role_ids == ["resume_strategist"]
+    assert handoff.target_role_ids == ["material_builder"]
     completed = [
         event for event in events if event.kind == "agent_completed"
     ]
     assert {event.role_id for event in completed} == {
         "job_scout",
-        "resume_strategist",
+        "material_builder",
         "judge",
     }
     assert all(event.model for event in completed)

@@ -20,13 +20,15 @@ LEARNING_SECTIONS = {
 }
 ROLE_DAILY_LABELS = {
     "job_scout": ("Job Scout", "新增岗位、链接核验与投递优先级"),
-    "jd_analyst": ("JD Analyst", "岗位要求、匹配点与技能缺口"),
-    "job_knowledge_curator": (
-        "Knowledge Curator",
-        "书籍章节、技术栈与学习产出",
+    "job_analyst": (
+        "Job Analyst",
+        "岗位要求、匹配点、技能缺口与对应的技术栈与学习产出",
     ),
-    "resume_strategist": ("Resume Strategist", "优先简历版本与 bullet 动作"),
-    "portfolio_coach": ("Portfolio Coach", "Vibe Coding 灵感与作品推进"),
+    "match_scorer": ("Match Scorer", "岗位匹配度评分与投递优先级"),
+    "material_builder": (
+        "Material Builder",
+        "简历版本与 bullet 动作、作品推进与展示材料",
+    ),
     "interview_coach": ("Interview Coach", "具体题目、口述与追问训练"),
     "judge": ("Evidence Judge", "交付核对与今天先做三件事"),
 }
@@ -36,17 +38,16 @@ def build_daily_assignment_digest(target_date: str) -> str:
     lines = [
         f"# {target_date} 新岗位任务拆解",
         "> Chief of Staff 已把日报转成可追踪任务图。"
-        "依赖关系：岗位发现 → JD/知识分析 → 简历/作品/面试 → Judge。",
+        "依赖关系：岗位发现 → 岗位分析 → 材料产出/面试 → Judge。",
         "## 角色任务",
     ]
     for role_id, (display_name, assignment) in ROLE_DAILY_LABELS.items():
         dependencies = {
             "job_scout": "无，首先执行",
-            "jd_analyst": "依赖 Job Scout",
-            "job_knowledge_curator": "依赖 Job Scout",
-            "resume_strategist": "依赖 JD 与岗位知识",
-            "portfolio_coach": "依赖 JD 与岗位知识",
-            "interview_coach": "依赖 JD 与岗位知识",
+            "job_analyst": "依赖 Job Scout",
+            "match_scorer": "依赖岗位分析",
+            "material_builder": "依赖岗位分析",
+            "interview_coach": "依赖岗位分析",
             "judge": "依赖全部工作角色",
         }[role_id]
         lines.append(
@@ -249,7 +250,7 @@ def build_role_daily_digests(
                 ),
             )
         ],
-        "jd_analyst": [
+        "job_analyst": [
             _section_markdown(
                 sections,
                 autumn,
@@ -267,15 +268,27 @@ def build_role_daily_digests(
                 "今日简历优化动作",
                 "今天的 JD 拆解动作",
             ),
-        ],
-        "job_knowledge_curator": [
             _section_markdown(
                 sections,
                 learning_source,
                 "今天具体学什么",
+            ),
+        ],
+        "match_scorer": [
+            _section_markdown(
+                sections,
+                autumn,
+                "匹配度与投递优先级",
+                include_terms=(
+                    "最优先",
+                    "其次",
+                    "贴合",
+                    "匹配",
+                    "投递",
+                ),
             )
         ],
-        "resume_strategist": [
+        "material_builder": [
             _section_markdown(
                 sections,
                 autumn,
@@ -294,8 +307,6 @@ def build_role_daily_digests(
                 "今日简历优化动作",
                 "今天的简历动作",
             ),
-        ],
-        "portfolio_coach": [
             _section_markdown(
                 sections,
                 "今日 Vibe Coding 灵感",

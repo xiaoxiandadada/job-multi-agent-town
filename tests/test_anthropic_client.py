@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from job_agent_harness.anthropic_client import (
     WEB_FETCH_TOOL_TYPE,
@@ -223,6 +224,135 @@ async def test_effort_is_only_sent_when_configured(tmp_path):
     await client.complete(make_role(), "查岗位")
 
     assert client.client().messages.calls[0]["output_config"] == {"effort": "medium"}
+
+
+async def test_a_role_can_set_its_own_effort(tmp_path):
+    # A finer lever than swapping models: the planner routes at "low" while the
+    # analyst reasons at "high", on the same deployment.
+    client = build_client(
+        [reply([text_block("ok")])], tmp_path, effort="medium", web_tools="server"
+    )
+
+    await client.complete(make_role(effort="high"), "拆解这个 JD")
+
+    assert client.client().messages.calls[0]["output_config"] == {"effort": "high"}
+
+
+async def test_a_role_with_no_effort_inherits_the_deployment_default(tmp_path):
+    client = build_client(
+        [reply([text_block("ok")])], tmp_path, effort="medium", web_tools="server"
+    )
+
+    await client.complete(make_role(effort=None), "查岗位")
+
+    assert client.client().messages.calls[0]["output_config"] == {"effort": "medium"}
+
+
+async def test_no_effort_anywhere_sends_no_output_config(tmp_path):
+    """Absent is not the same as "high" — Haiku 4.5 rejects the parameter.
+
+    A role pinned to a model that has no effort support has to be able to end up
+    with no ``output_config`` at all; inheriting a level from the environment
+    would turn every one of its calls into a 400.
+    """
+
+    client = build_client(
+        [reply([text_block("ok")])], tmp_path, effort="", web_tools="server"
+    )
+
+    await client.complete(make_role(effort=None), "查岗位")
+
+    assert "output_config" not in client.client().messages.calls[0]
+
+
+def test_effort_rejects_a_level_the_api_does_not_have():
+    # Catch the typo when roles.json loads, not as a provider 400 mid-run.
+    with pytest.raises(ValidationError):
+        make_role(effort="very-high")
+
+
+def test_web_search_still_grants_both_local_tools(tmp_path):
+    client = build_client([reply([text_block("ok")])], tmp_path, web_tools="local")
+    role = make_role(tools=["web_search"])
+
+    assert client.local_tool_names_for(role) == ["list_tracked_jobs", "fetch_url"]
+    names = [tool["name"] for tool in client.local_tools_for(role)]
+    assert names == ["list_tracked_jobs", "fetch_url"]
+
+
+def test_a_role_can_be_given_fetch_url_without_search(tmp_path):
+    """The judge's case: verify a cited link, don't go discover new jobs.
+
+    ``list_tracked_jobs`` would let it introduce jobs no upstream role mentioned,
+    which its own prompt forbids — so the narrow grant has to be expressible.
+    """
+
+    client = build_client([reply([text_block("ok")])], tmp_path)
+    role = make_role(role_id="judge", tools=["local_docs", "fetch_url"])
+
+    assert client.local_tool_names_for(role) == ["fetch_url"]
+    assert [tool["name"] for tool in client.local_tools_for(role)] == ["fetch_url"]
+    # Naming a local tool pins the local executor: there is no server-side
+    # "fetch but never search" pair to fall back to.
+    assert client.web_mode_for(role) == "local"
+
+
+def test_a_narrow_grant_does_not_advertise_the_other_tool(tmp_path):
+    """A described-but-uncallable tool makes the model try it and then apologise.
+
+    The judge only gets ``fetch_url``, so the guidance must point it at links
+    already in the conversation — the default wording points at
+    ``list_tracked_jobs``, a tool it does not have.
+    """
+
+    client = build_client([reply([text_block("ok")])], tmp_path)
+    prompt = client.system_blocks_for(
+        make_role(role_id="judge", tools=["fetch_url"])
+    )[0]["text"]
+
+    assert "fetch_url" in prompt
+    assert "list_tracked_jobs" not in prompt
+    assert "上文已经出现过" in prompt
+
+
+def test_a_verifier_does_not_inherit_the_job_entry_output_contract(tmp_path):
+    """The judge returns an audit verdict, not a list of companies and JD quotes.
+
+    Appending the discovery output contract to a verifier contradicts its own
+    system prompt, and the model then has to pick one.
+    """
+
+    client = build_client([reply([text_block("ok")])], tmp_path)
+
+    verifier = client.system_blocks_for(
+        make_role(role_id="judge", tools=["fetch_url"])
+    )[0]["text"]
+    scout = client.system_blocks_for(
+        make_role(tools=["web_search"])
+    )[0]["text"]
+
+    assert "输出具体度要求" not in verifier
+    # The role whose job *is* producing entries still gets it.
+    assert "输出具体度要求" in scout
+
+
+def test_list_tracked_jobs_alone_reads_the_table_without_web_access(tmp_path):
+    client = build_client([reply([text_block("ok")])], tmp_path)
+    role = make_role(role_id="material_builder", tools=["list_tracked_jobs"])
+
+    assert client.local_tool_names_for(role) == ["list_tracked_jobs"]
+    prompt = client.system_blocks_for(role)[0]["text"]
+    assert "list_tracked_jobs" in prompt
+    assert "fetch_url" not in prompt
+
+
+def test_a_role_with_no_evidence_tools_gets_none(tmp_path):
+    client = build_client([reply([text_block("ok")])], tmp_path)
+    role = make_role(role_id="interview_coach", tools=["local_docs"])
+
+    assert client.local_tool_names_for(role) == []
+    assert client.web_mode_for(role) == "off"
+    assert client.local_tools_for(role) == []
 
 
 async def test_fetched_urls_are_reported_as_real_sources(tmp_path):

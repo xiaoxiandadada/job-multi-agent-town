@@ -50,13 +50,12 @@ const T = {
  * 上，否则墙缝会有半像素裂纹。x/y 是建筑左上角。
  */
 const PLACES = {
-  job_scout:             {x: 4,  y: 3,  roof: 'grey', wall: 'brown', sign: T.gold,    label: 'Scout Outpost'},
-  jd_analyst:            {x: 15, y: 2,  roof: 'red',  wall: 'grey',  sign: T.key,     label: 'JD Lab'},
-  job_knowledge_curator: {x: 33, y: 3,  roof: 'grey', wall: 'grey',  sign: T.pickaxe, label: 'Knowledge Library'},
-  resume_strategist:     {x: 4,  y: 19, roof: 'red',  wall: 'brown', sign: T.scythe,  label: 'Resume Workshop'},
-  portfolio_coach:       {x: 16, y: 21, roof: 'grey', wall: 'brown', sign: T.hammer,  label: 'Portfolio Garage'},
-  interview_coach:       {x: 29, y: 21, roof: 'red',  wall: 'grey',  sign: T.target,  label: 'Interview Arena'},
-  judge:                 {x: 37, y: 12, roof: 'grey', wall: 'grey',  sign: T.bow,     label: 'Evidence Court'},
+  job_scout:        {x: 4,  y: 3,  roof: 'grey', wall: 'brown', sign: T.gold,    label: 'Scout Outpost'},
+  job_analyst:      {x: 15, y: 2,  roof: 'red',  wall: 'grey',  sign: T.key,     label: 'JD Lab'},
+  match_scorer:     {x: 33, y: 3,  roof: 'grey', wall: 'grey',  sign: T.pickaxe, label: 'Match Bureau'},
+  material_builder: {x: 4,  y: 19, roof: 'red',  wall: 'brown', sign: T.hammer,  label: 'Material Workshop'},
+  interview_coach:  {x: 29, y: 21, roof: 'red',  wall: 'grey',  sign: T.target,  label: 'Interview Arena'},
+  judge:            {x: 37, y: 12, roof: 'grey', wall: 'grey',  sign: T.bow,     label: 'Evidence Court'},
 };
 
 // Plaza 是路由器所在的地方，所以 dispatch 线从这里出发。
@@ -66,10 +65,9 @@ const PLAZA = {x: 19, y: 11, w: 6, h: 5};
 // 「在动」靠上下小幅 bob 和朝向翻转表达，而不是假装有走路动画。
 const SPRITES = {
   job_scout: 112,
-  jd_analyst: 84,
-  job_knowledge_curator: 88,
-  resume_strategist: 98,
-  portfolio_coach: 85,
+  job_analyst: 84,
+  match_scorer: 88,
+  material_builder: 98,
   interview_coach: 96,
   judge: 97,
 };

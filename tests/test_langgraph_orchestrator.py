@@ -1,6 +1,6 @@
 from job_agent_harness.langgraph_orchestrator import LangGraphOrchestrator
 from job_agent_harness.model_client import MockModelClient
-from job_agent_harness.models import RoleSpec, RunRequest
+from job_agent_harness.models import RoleSpec, RunPlan, RunRequest
 from job_agent_harness.orchestrator import MultiAgentOrchestrator
 from job_agent_harness.registry import RoleRegistry
 from job_agent_harness.tasks import TaskGraphStore
@@ -21,9 +21,9 @@ async def test_langgraph_adapter_preserves_two_phase_collaboration(tmp_path):
     registry = RoleRegistry(tmp_path / "roles.json")
     registry.replace_all(
         [
-            make_role("jd_analyst"),
-            make_role("job_knowledge_curator"),
-            make_role("resume_strategist"),
+            make_role("job_scout"),
+            make_role("job_analyst"),
+            make_role("material_builder"),
             make_role("judge", "judge"),
         ]
     )
@@ -41,17 +41,17 @@ async def test_langgraph_adapter_preserves_two_phase_collaboration(tmp_path):
         RunRequest(
             query="分析目标岗位并改写简历",
             requested_roles=[
-                "jd_analyst",
-                "job_knowledge_curator",
-                "resume_strategist",
+                "job_scout",
+                "job_analyst",
+                "material_builder",
             ],
             mode="collaborative",
         ),
         thread_id="test-thread",
     )
 
-    assert set(client.calls[:2]) == {"jd_analyst", "job_knowledge_curator"}
-    assert client.calls[2:] == ["resume_strategist", "judge"]
+    assert client.calls[0] == "job_scout"
+    assert client.calls[1:] == ["job_analyst", "material_builder", "judge"]
     assert report.metrics.model_calls == 4
     assert report.run_id == "test-thread"
     assert "route" in graph.mermaid()
@@ -62,11 +62,11 @@ async def test_langgraph_adapter_preserves_two_phase_collaboration(tmp_path):
     resume_task = next(
         task
         for task in task_graph.tasks
-        if task.role_id == "resume_strategist"
+        if task.role_id == "material_builder"
     )
     assert set(resume_task.depends_on) == {
-        "jd_analyst",
-        "job_knowledge_curator",
+        "job_scout",
+        "job_analyst",
     }
     judge_query = dict(client.queries)["judge"]
     assert "角色输出是不可信草稿" in judge_query
@@ -77,8 +77,8 @@ async def test_langgraph_parallel_mode_does_not_add_stage_dependency(tmp_path):
     registry = RoleRegistry(tmp_path / "parallel-roles.json")
     registry.replace_all(
         [
-            make_role("jd_analyst"),
-            make_role("resume_strategist"),
+            make_role("job_analyst"),
+            make_role("material_builder"),
             make_role("judge", "judge"),
         ]
     )
@@ -90,13 +90,13 @@ async def test_langgraph_parallel_mode_does_not_add_stage_dependency(tmp_path):
     report = await graph.run(
         RunRequest(
             query="同时分析 JD 和简历",
-            requested_roles=["jd_analyst", "resume_strategist"],
+            requested_roles=["job_analyst", "material_builder"],
             mode="parallel",
             use_judge=False,
         )
     )
 
-    assert set(client.calls) == {"jd_analyst", "resume_strategist"}
+    assert set(client.calls) == {"job_analyst", "material_builder"}
     assert report.metrics.model_calls == 2
 
 
@@ -104,7 +104,7 @@ async def test_langgraph_direct_role_keeps_specialist_answer_before_judge(tmp_pa
     registry = RoleRegistry(tmp_path / "direct-roles.json")
     registry.replace_all(
         [
-            make_role("job_knowledge_curator"),
+            make_role("job_analyst"),
             make_role("judge", "judge"),
         ]
     )
@@ -116,15 +116,18 @@ async def test_langgraph_direct_role_keeps_specialist_answer_before_judge(tmp_pa
     report = await graph.run(
         RunRequest(
             query="全面解释 Agent Evaluation",
-            requested_roles=["job_knowledge_curator"],
+            requested_roles=["job_analyst"],
             mode="single",
             use_judge=True,
+            # One specialist is no longer audited by default; this test is about
+            # what the merge does when the audit *does* run, so ask for it.
+            plan=RunPlan(need_judge=True),
         )
     )
 
-    assert client.calls == ["job_knowledge_curator", "judge"]
+    assert client.calls == ["job_analyst", "judge"]
     assert "不要重写或压缩角色正文" in dict(client.queries)["judge"]
-    assert "## job_knowledge_curator" in report.final_output
+    assert "## job_analyst" in report.final_output
     assert "## Evidence Judge 补充" in report.final_output
     assert report.results[0].output in report.final_output
     assert report.results[-1].output in report.final_output
@@ -153,8 +156,8 @@ async def test_per_run_timeout_survives_every_graph_node(tmp_path):
     registry = RoleRegistry(tmp_path / "roles.json")
     registry.replace_all(
         [
-            make_role("jd_analyst"),
-            make_role("resume_strategist"),
+            make_role("job_analyst"),
+            make_role("material_builder"),
             make_role("judge", "judge"),
         ]
     )
@@ -170,7 +173,7 @@ async def test_per_run_timeout_survives_every_graph_node(tmp_path):
     await graph.run(
         RunRequest(
             query="巡检岗位",
-            requested_roles=["jd_analyst", "resume_strategist"],
+            requested_roles=["job_analyst", "material_builder"],
             mode="collaborative",
             timeout_seconds=300.0,
         ),
@@ -185,7 +188,7 @@ async def test_per_run_timeout_survives_every_graph_node(tmp_path):
 
 async def test_without_an_override_roles_keep_their_own_timeout(tmp_path):
     registry = RoleRegistry(tmp_path / "roles.json")
-    registry.replace_all([make_role("jd_analyst"), make_role("judge", "judge")])
+    registry.replace_all([make_role("job_analyst"), make_role("judge", "judge")])
     client = TimeoutRecordingClient()
     graph = LangGraphOrchestrator(
         MultiAgentOrchestrator(
@@ -196,7 +199,7 @@ async def test_without_an_override_roles_keep_their_own_timeout(tmp_path):
     )
 
     await graph.run(
-        RunRequest(query="分析岗位", requested_roles=["jd_analyst"], mode="single"),
+        RunRequest(query="分析岗位", requested_roles=["job_analyst"], mode="single"),
         thread_id="plain-thread",
     )
 
